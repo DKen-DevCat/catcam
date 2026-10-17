@@ -6,7 +6,7 @@ extension Array where Element == Rect {
 }
 
 /// 正規化座標（0..1、原点は左上）の矩形
-public struct Rect: Equatable, Sendable {
+public struct Rect: Equatable, Codable, Sendable {
     public var x: Double
     public var y: Double
     public var w: Double

@@ -169,6 +169,16 @@ SwiftUI の NSPanel。元動画のパネルに準拠する。
   - 作った映像を公開する場合はクレジットが必要
 - 任意: 自前の猫写真。`VNGenerateForegroundInstanceMaskRequest`（macOS 14+）で自動切り抜き
 
+### 取得と生成
+```
+mkdir -p data/oxford-pets && cd data/oxford-pets
+curl -LO https://www.robots.ox.ac.uk/~vgg/data/pets/data/images.tar.gz       # 約 790MB
+curl -LO https://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz  # 約 19MB
+tar xzf images.tar.gz && tar xzf annotations.tar.gz && cd ../..
+swift run -c release catlib-builder   # → catlib/shape_atlas.png, catlib/index.json（約 8 秒）
+```
+クレジット: O. M. Parkhi, A. Vedaldi, A. Zisserman, C. V. Jawahar, "Cats and Dogs", CVPR 2012（CC BY-SA 4.0）。
+
 ### 処理
 1. trimap（前景 = 1、境界 = 3 は半透明）から切り抜き、前景の bbox でトリミング
 2. 細すぎる・欠けている（前景が画像端に大きく接している）ものは除外
@@ -200,7 +210,7 @@ SwiftUI の NSPanel。元動画のパネルに準拠する。
 |---|---|---|
 | M0 ✅ | ツールチェーン確認 | Xcode 15.3 / Swift 5.10 で AppKit + Metal + Vision + AVFoundation の実行ファイルがビルドでき、カメラ許可が取れる（2026-10-17 確認。`CatCam --doctor`） |
 | M1 | 本家の再現（猫なし） | 動き領域がカメラ映像の切り抜き入りの偽ウィンドウで浮かぶ。30fps・CPU 予算内 |
-| M2 | 猫ライブラリ | catlib-builder で shape_atlas / index.json が生成できる |
+| M2 ✅ | 猫ライブラリ | catlib-builder で shape_atlas / index.json が生成できる（2026-10-18。猫 2,371 枚 → 使用可 1,572 → 縦横比を散らして 1,024 体。除外: 端で切れている 772、小さすぎ 27） |
 | M3 | ① 形マッチング | 動き領域が形の近い猫に置き換わる。ちらつかない |
 | M4 | ② 顔 → 猫顔 | 顔に猫顔が目・鼻の位置で合わさって追従する |
 | M5 | 仕上げ | 残像・パネル・表示モード・Labels |

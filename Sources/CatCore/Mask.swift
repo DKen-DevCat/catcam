@@ -72,6 +72,14 @@ public struct Component: Equatable, Sendable {
     public var maxX: Int
     public var maxY: Int
     public var area: Int
+
+    public init(minX: Int, minY: Int, maxX: Int, maxY: Int, area: Int) {
+        self.minX = minX
+        self.minY = minY
+        self.maxX = maxX
+        self.maxY = maxY
+        self.area = area
+    }
 }
 
 public enum ConnectedComponents {
