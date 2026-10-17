@@ -48,7 +48,7 @@ final class ControlPanel: NSPanel {
             guard let self else { return }
             let line = pipeline.stats.roll()
             statsLabel.stringValue = line.replacingOccurrences(of: "  ", with: "\n")
-            if log { print(line) }
+            if log { print(line + "  fx[\(Doctor.videoEffectsSummary())]") }
         }
     }
 
