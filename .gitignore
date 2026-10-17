@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+catlib/
+data/
+*.app
+.DS_Store
