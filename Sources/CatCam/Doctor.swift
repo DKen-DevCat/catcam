@@ -28,6 +28,16 @@ enum Doctor {
             "portrait=\(AVCaptureDevice.isPortraitEffectEnabled)",
             "studioLight=\(AVCaptureDevice.isStudioLightEnabled)",
             "centerStage=\(AVCaptureDevice.isCenterStageEnabled)",
+            // 背景エフェクトは macOS 15 の API で SDK(14.4) に無いので、実行時に問い合わせる
+            "background=\(classFlag("backgroundReplacementEnabled").map(String.init) ?? "n/a")",
         ].joined(separator: " ")
+    }
+
+    /// AVCaptureDevice のクラスプロパティ（Bool）を名前で読む。無ければ nil
+    private static func classFlag(_ key: String) -> Bool? {
+        let cls: AnyObject = AVCaptureDevice.self
+        let getter = "is" + key.prefix(1).uppercased() + key.dropFirst()
+        guard cls.responds(to: NSSelectorFromString(getter)) else { return nil }
+        return cls.value(forKey: key) as? Bool
     }
 }
