@@ -110,6 +110,30 @@ final class MotionDetectorTests: XCTestCase {
         XCTAssertEqual(bottomRight?.rect.h ?? 0, 2.0 / Double(h), accuracy: 1e-9)
     }
 
+    func testMotionInsideHoldRegionStaysForHoldFrames() {
+        let d = MotionDetector(config: MotionConfig(sensitivity: 0.7, minArea: 1, maxBlobs: 10, dilateIterations: 0))
+        let left = [Rect(x: 0, y: 0, w: 0.5, h: 1)]
+        _ = d.process(frame())
+        let moved = d.process(frame(squares: [(5, 5, 4), (25, 5, 4)]), holdRegions: left, holdFrames: 3)
+        XCTAssertEqual(moved.count, 2)
+
+        // 動きが止まった後も、左（保持領域）だけ 3 フレーム残る
+        for _ in 0..<3 {
+            let held = d.process(frame(), holdRegions: left, holdFrames: 3)
+            XCTAssertEqual(held.count, 1)
+            XCTAssertLessThan(held.first?.rect.x ?? 1, 0.5)
+        }
+        XCTAssertTrue(d.process(frame(), holdRegions: left, holdFrames: 3).isEmpty)
+    }
+
+    func testHoldIsLimitedToRegion() {
+        let d = MotionDetector(config: MotionConfig(sensitivity: 0.7, minArea: 1, maxBlobs: 10, dilateIterations: 0))
+        _ = d.process(frame())
+        _ = d.process(frame(squares: [(25, 5, 4)]))
+        // 保持領域の外で動いたものは、後から領域を指定しても残らない
+        XCTAssertTrue(d.process(frame(), holdRegions: [Rect(x: 0, y: 0, w: 0.5, h: 1)], holdFrames: 30).isEmpty)
+    }
+
     func testGateIgnoresMotionOutsidePerson() {
         let d = detector()
         _ = d.process(frame())

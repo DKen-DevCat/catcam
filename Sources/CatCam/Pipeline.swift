@@ -6,9 +6,8 @@ import QuartzCore
 /// 描画に必要なその時点の状態一式
 struct Scene {
     var pixelBuffer: CVPixelBuffer?
+    /// 動き（顔の動きも含む）のウィンドウ
     var tracks: [Track] = []
-    /// 顔を最大サイズ以下に分割したもの
-    var faceTiles: [(rect: Rect, alpha: Double)] = []
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
     var personMaskVersion = 0
@@ -30,7 +29,8 @@ final class Pipeline {
     /// ウィンドウの最大サイズ（映像の高さに対する比率）。queue 上でのみ触る
     private var maxWindow = 0.25
     private let tracker = Tracker()
-    private let faceTracker = Tracker(config: TrackerConfig(iouThreshold: 0.05, maxMissed: 6, historyLength: 0, historyInterval: 1, smoothing: 0.5))
+    /// 顔の領域では、この秒数以内に動いた画素を表示し続ける（瞬きや口の動きを残す）
+    private let faceHoldSeconds = 1.0
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
@@ -80,16 +80,15 @@ final class Pipeline {
             person = segmenter.latest(maxAge: 0.5)
             segmenter.submitIfIdle(pb)
         }
-        let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faceRects)
+        // 顔も腕と同じく動いた画素から出す。顔の中だけは小さな動きを一定時間保持する
+        let blobs = motion.process(gray, gate: person?.gate,
+                                   holdRegions: faceRects.map { $0.padded(0.15) },
+                                   holdFrames: Int(faceHoldSeconds * 30))
         let tracks = tracker.update(blobs: blobs)
-        // 顔は丸ごと追跡してから分割する（分割の境目がフレームごとに揺れないように）
-        let faceTiles = faceTracker.update(blobs: faceRects.map { Blob(rect: $0, area: 0) }).flatMap { f in
-            f.rect.padded(0.15).tiled(maxW: maxW, maxH: maxH).map { (rect: $0, alpha: f.alpha) }
-        }
         stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count)
 
         lock.lock()
-        current = Scene(pixelBuffer: pb, tracks: tracks, faceTiles: faceTiles,
+        current = Scene(pixelBuffer: pb, tracks: tracks,
                         personMask: person?.mask, personMaskVersion: person?.version ?? 0)
         lock.unlock()
     }

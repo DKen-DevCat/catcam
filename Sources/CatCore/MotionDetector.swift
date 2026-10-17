@@ -41,6 +41,9 @@ public struct Blob: Equatable, Sendable {
 public final class MotionDetector {
     public var config: MotionConfig
     private var background: [Float] = []
+    /// 画素ごとに最後に動いたフレーム番号
+    private var lastMoved: [Int] = []
+    private var frameIndex = 0
     private var size = (w: 0, h: 0)
 
     public init(config: MotionConfig = MotionConfig()) {
@@ -48,21 +51,31 @@ public final class MotionDetector {
     }
 
     /// `gate` を渡すと、その true の画素で起きた動きだけを拾う（人物マスクで背景の動きを無視する用途）。
-    /// サイズが `img` と違うマスクは無視する
-    public func process(_ img: GrayImage, gate: BinaryMask? = nil) -> [Blob] {
+    /// サイズが `img` と違うマスクは無視する。
+    /// `holdRegions` の中では、直近 `holdFrames` フレーム以内に動いた画素も動いているとみなす（顔の小さな動きを残す用途）
+    public func process(_ img: GrayImage, gate: BinaryMask? = nil,
+                        holdRegions: [Rect] = [], holdFrames: Int = 0) -> [Blob] {
         if size != (img.width, img.height) || background.isEmpty {
             size = (img.width, img.height)
             background = img.pixels.map(Float.init)
+            lastMoved = [Int](repeating: Int.min / 2, count: img.pixels.count)
             return []
         }
+        frameIndex += 1
 
         let t = config.threshold, a = config.backgroundAlpha
         let gate = gate.flatMap { $0.width == img.width && $0.height == img.height ? $0 : nil }
         var mask = BinaryMask(width: img.width, height: img.height)
         for i in 0..<img.pixels.count {
             let v = Float(img.pixels[i])
-            mask.bits[i] = abs(v - background[i]) > t && (gate?.bits[i] ?? true)
+            if abs(v - background[i]) > t && (gate?.bits[i] ?? true) {
+                mask.bits[i] = true
+                lastMoved[i] = frameIndex
+            }
             background[i] += (v - background[i]) * a
+        }
+        if holdFrames > 0 {
+            applyHold(to: &mask, regions: holdRegions, frames: holdFrames)
         }
         for _ in 0..<config.dilateIterations {
             mask = Morphology.dilate(mask)
@@ -85,6 +98,23 @@ public final class MotionDetector {
                                 w: Double(c.maxX - c.minX + 1) / fw, h: Double(c.maxY - c.minY + 1) / fh),
                      area: c.area)
             }
+    }
+
+    /// 領域内（画素の中心で判定）で直近 `frames` フレーム以内に動いた画素を立てる
+    private func applyHold(to mask: inout BinaryMask, regions: [Rect], frames: Int) {
+        let w = mask.width, h = mask.height
+        for r in regions {
+            let x0 = max(0, Int((r.x * Double(w) - 0.5).rounded(.up)))
+            let x1 = min(w - 1, Int((r.maxX * Double(w) - 0.5).rounded(.down)))
+            let y0 = max(0, Int((r.y * Double(h) - 0.5).rounded(.up)))
+            let y1 = min(h - 1, Int((r.maxY * Double(h) - 0.5).rounded(.down)))
+            guard x0 <= x1, y0 <= y1 else { continue }
+            for y in y0...y1 {
+                for x in x0...x1 where frameIndex - lastMoved[y * w + x] <= frames {
+                    mask.bits[y * w + x] = true
+                }
+            }
+        }
     }
 
     /// 最大サイズを超える成分を等分のマス目に分け、マスごとに中の画素へぴったり合う矩形を返す。

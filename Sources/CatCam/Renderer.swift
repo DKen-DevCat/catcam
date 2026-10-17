@@ -160,9 +160,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
             add(t.rect, alpha: t.alpha, kind: 0, minSize: 36)
         }
-        for f in scene.faceTiles {
-            add(f.rect, alpha: f.alpha, kind: 1, minSize: 36)
-        }
         return out
     }
 
