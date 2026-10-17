@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>dev.catcam.app</string>
+	<key>CFBundleName</key>
+	<string>catcam</string>
+	<key>NSCameraUsageDescription</key>
+	<string>カメラ映像の動きと顔を検出して猫に差し替えます（映像は外部に送信しません）</string>
+	<key>NSCameraReactionEffectGesturesEnabledDefault</key>
+	<false/>
+</dict>
+</plist>

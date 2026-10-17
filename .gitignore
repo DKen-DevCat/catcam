@@ -4,3 +4,4 @@ catlib/
 data/
 *.app
 .DS_Store
+build/
