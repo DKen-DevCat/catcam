@@ -10,6 +10,8 @@ struct Scene {
     var tracks: [Track] = []
     /// 顔（パーツは M4 の猫顔合わせ用に保持するだけで、ウィンドウにはしない）
     var faces: [Face] = []
+    /// 顔のウィンドウ。動きと同じく湧いた場所から動かない
+    var faceTracks: [Track] = []
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
     var personMaskVersion = 0
@@ -35,6 +37,8 @@ final class Pipeline {
     private let tracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0,
                                                         freezeWhenIdle: true, idleArea: 30))
     private let faceSmoother = FaceSmoother(smoothing: 0.5)
+    // 顔も追従しない。顔が枠から外れるほど動いたら新しい場所に湧き、古い枠は消えていく
+    private let faceTracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0))
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
@@ -86,10 +90,11 @@ final class Pipeline {
         // 顔は専用のウィンドウで出すので、顔の動きは動きのウィンドウにしない
         let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faces.map { $0.rect.padded(0.15) })
         let tracks = tracker.update(blobs: blobs)
+        let faceTracks = faceTracker.update(blobs: faces.map { Blob(rect: $0.rect.padded(0.15), area: 0) })
         stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count)
 
         lock.lock()
-        current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces,
+        current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces, faceTracks: faceTracks,
                         personMask: person?.mask, personMaskVersion: person?.version ?? 0)
         lock.unlock()
     }
