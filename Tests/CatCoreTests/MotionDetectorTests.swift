@@ -70,6 +70,46 @@ final class MotionDetectorTests: XCTestCase {
         XCTAssertTrue(last.isEmpty, "静止した物体はいずれ背景に溶ける")
     }
 
+    func testLargeBlobIsSplitIntoTilesNoLargerThanMax() {
+        let d = MotionDetector(config: MotionConfig(sensitivity: 0.7, minArea: 1, maxBlobs: 50,
+                                                    dilateIterations: 0, maxBlobWidth: 0.25, maxBlobHeight: 1))
+        _ = d.process(frame())
+        // 幅 30px の横長の棒（最大幅は 40 * 0.25 = 10px）
+        var img = frame()
+        for y in 8..<12 {
+            for x in 5..<35 {
+                img[x, y] = 200
+            }
+        }
+        let blobs = d.process(img)
+        XCTAssertEqual(blobs.count, 3)
+        for b in blobs {
+            XCTAssertLessThanOrEqual(b.rect.w, 0.25 + 1e-9)
+        }
+        XCTAssertEqual(blobs.map(\.area).reduce(0, +), 30 * 4)
+    }
+
+    func testSplitDropsEmptyCellsAndFitsTightly() {
+        let d = MotionDetector(config: MotionConfig(sensitivity: 0.7, minArea: 1, maxBlobs: 50,
+                                                    dilateIterations: 0, maxBlobWidth: 0.25, maxBlobHeight: 0.5))
+        _ = d.process(frame())
+        // L 字: 縦棒 x=2..3, y=0..19 と 横棒 x=2..21, y=18..19。右上の 2 マスは空
+        var img = frame()
+        for y in 0..<20 {
+            for x in 2..<4 { img[x, y] = 200 }
+        }
+        for y in 18..<20 {
+            for x in 2..<22 { img[x, y] = 200 }
+        }
+        let blobs = d.process(img)
+        // 20x20 の bbox を 2x2 に分割 → 右上は空なので 3 枚
+        XCTAssertEqual(blobs.count, 3)
+        // 右下のマスは横棒だけにぴったり合う（y=18..19）
+        let bottomRight = blobs.first { $0.rect.x > 0.25 }
+        XCTAssertEqual(bottomRight?.rect.y ?? 0, 18.0 / Double(h), accuracy: 1e-9)
+        XCTAssertEqual(bottomRight?.rect.h ?? 0, 2.0 / Double(h), accuracy: 1e-9)
+    }
+
     func testGateIgnoresMotionOutsidePerson() {
         let d = detector()
         _ = d.process(frame())

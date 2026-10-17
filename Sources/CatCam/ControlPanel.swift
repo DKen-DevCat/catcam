@@ -11,7 +11,7 @@ final class ControlPanel: NSPanel {
     init(pipeline: Pipeline, renderer: Renderer, cameraName: String) {
         self.pipeline = pipeline
         self.renderer = renderer
-        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 300),
+        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 340),
                    styleMask: [.titled, .utilityWindow], backing: .buffered, defer: false)
         title = "catcam — \(cameraName)"
         level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
@@ -20,6 +20,7 @@ final class ControlPanel: NSPanel {
         statsLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         let sensitivity = NSSlider(value: 0.7, minValue: 0.05, maxValue: 0.98, target: self, action: #selector(sensitivityChanged(_:)))
         let minSize = NSSlider(value: 20, minValue: 4, maxValue: 400, target: self, action: #selector(minSizeChanged(_:)))
+        let maxWindow = NSSlider(value: 0.25, minValue: 0.08, maxValue: 0.8, target: self, action: #selector(maxWindowChanged(_:)))
         let mirror = NSButton(checkboxWithTitle: "Mirror", target: self, action: #selector(mirrorChanged(_:)))
         mirror.state = renderer.mirror ? .on : .off
         let person = NSButton(checkboxWithTitle: "Person only（背景を消す）", target: self, action: #selector(personChanged(_:)))
@@ -32,12 +33,13 @@ final class ControlPanel: NSPanel {
             statsLabel,
             NSTextField(labelWithString: "Sensitivity"), sensitivity,
             NSTextField(labelWithString: "Minimum size"), minSize,
+            NSTextField(labelWithString: "Max window size（超えたら分割）"), maxWindow,
             mirror, person, effects, quit,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        for v in [statsLabel, sensitivity, minSize] {
+        for v in [statsLabel, sensitivity, minSize, maxWindow] {
             v.widthAnchor.constraint(equalToConstant: 276).isActive = true
         }
         contentView = stack
@@ -60,6 +62,10 @@ final class ControlPanel: NSPanel {
     @objc private func minSizeChanged(_ s: NSSlider) {
         let v = Int(s.doubleValue)
         pipeline.updateMotionConfig { $0.minArea = v }
+    }
+
+    @objc private func maxWindowChanged(_ s: NSSlider) {
+        pipeline.setMaxWindow(s.doubleValue)
     }
 
     @objc private func mirrorChanged(_ b: NSButton) {

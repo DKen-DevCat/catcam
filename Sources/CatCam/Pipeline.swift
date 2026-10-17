@@ -7,7 +7,8 @@ import QuartzCore
 struct Scene {
     var pixelBuffer: CVPixelBuffer?
     var tracks: [Track] = []
-    var faces: [Track] = []
+    /// 顔を最大サイズ以下に分割したもの
+    var faceTiles: [(rect: Rect, alpha: Double)] = []
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
     var personMaskVersion = 0
@@ -26,6 +27,8 @@ final class Pipeline {
     var personEnabled = true
     private let downsampler = Downsampler(width: 160, height: 90)
     private let motion = MotionDetector()
+    /// ウィンドウの最大サイズ（映像の高さに対する比率）。queue 上でのみ触る
+    private var maxWindow = 0.25
     private let tracker = Tracker()
     private let faceTracker = Tracker(config: TrackerConfig(iouThreshold: 0.05, maxMissed: 6, historyLength: 0, historyInterval: 1, smoothing: 0.5))
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
@@ -48,6 +51,10 @@ final class Pipeline {
         queue.async { [self] in change(&motion.config) }
     }
 
+    func setMaxWindow(_ v: Double) {
+        queue.async { [self] in maxWindow = v }
+    }
+
     func setPersonEnabled(_ on: Bool) {
         queue.async { [self] in personEnabled = on }
     }
@@ -61,6 +68,11 @@ final class Pipeline {
     /// キャプチャキュー上で呼ばれる
     func process(_ pb: CVPixelBuffer) {
         let t0 = CACurrentMediaTime()
+        // 高さ基準の比率を幅にも換算し、ほぼ正方形を上限にする
+        let aspect = Double(CVPixelBufferGetHeight(pb)) / Double(CVPixelBufferGetWidth(pb))
+        let maxW = maxWindow * aspect, maxH = maxWindow
+        motion.config.maxBlobWidth = maxW
+        motion.config.maxBlobHeight = maxH
         let gray = downsampler.gray(pb)
         let faceRects = currentFaces(pb, now: t0)
         var person: PersonSegmenter.Result?
@@ -70,11 +82,14 @@ final class Pipeline {
         }
         let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faceRects)
         let tracks = tracker.update(blobs: blobs)
-        let faces = faceTracker.update(blobs: faceRects.map { Blob(rect: $0, area: 0) })
+        // 顔は丸ごと追跡してから分割する（分割の境目がフレームごとに揺れないように）
+        let faceTiles = faceTracker.update(blobs: faceRects.map { Blob(rect: $0, area: 0) }).flatMap { f in
+            f.rect.padded(0.15).tiled(maxW: maxW, maxH: maxH).map { (rect: $0, alpha: f.alpha) }
+        }
         stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count)
 
         lock.lock()
-        current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces,
+        current = Scene(pixelBuffer: pb, tracks: tracks, faceTiles: faceTiles,
                         personMask: person?.mask, personMaskVersion: person?.version ?? 0)
         lock.unlock()
     }

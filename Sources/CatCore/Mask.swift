@@ -77,6 +77,11 @@ public struct Component: Equatable, Sendable {
 public enum ConnectedComponents {
     /// 8 近傍の連結成分を 2 パス + union-find で求める
     public static func find(_ m: BinaryMask) -> [Component] {
+        label(m).components
+    }
+
+    /// `find` に加えて画素ごとのラベルを返す。ラベルは `components` の添字 + 1、背景は 0
+    public static func label(_ m: BinaryMask) -> (labels: [Int32], components: [Component]) {
         let w = m.width, h = m.height
         var labels = [Int32](repeating: 0, count: w * h)
         var parent: [Int32] = [0]
@@ -115,25 +120,27 @@ public enum ConnectedComponents {
             }
         }
 
-        var byRoot: [Int32: Component] = [:]
-        var order: [Int32] = []
+        // 根ごとに出現順の添字を振り、ラベルを「添字 + 1」に書き換えながら集計する
+        var indexOfRoot = [Int32](repeating: -1, count: parent.count)
+        var components: [Component] = []
         for y in 0..<h {
             for x in 0..<w {
-                let l = labels[y * w + x]
+                let i = y * w + x
+                let l = labels[i]
                 guard l != 0 else { continue }
-                let r = root(l)
-                if var c = byRoot[r] {
-                    c.minX = min(c.minX, x)
-                    c.maxX = max(c.maxX, x)
-                    c.maxY = y
-                    c.area += 1
-                    byRoot[r] = c
-                } else {
-                    byRoot[r] = Component(minX: x, minY: y, maxX: x, maxY: y, area: 1)
-                    order.append(r)
+                let r = Int(root(l))
+                if indexOfRoot[r] < 0 {
+                    indexOfRoot[r] = Int32(components.count)
+                    components.append(Component(minX: x, minY: y, maxX: x, maxY: y, area: 0))
                 }
+                let ci = Int(indexOfRoot[r])
+                components[ci].minX = min(components[ci].minX, x)
+                components[ci].maxX = max(components[ci].maxX, x)
+                components[ci].maxY = y
+                components[ci].area += 1
+                labels[i] = Int32(ci + 1)
             }
         }
-        return order.compactMap { byRoot[$0] }
+        return (labels, components)
     }
 }

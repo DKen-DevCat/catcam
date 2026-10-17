@@ -26,6 +26,21 @@ final class RectTests: XCTestCase {
         XCTAssertEqual(big.coverage(by: small), 1.0 / 16.0, accuracy: 1e-9)
     }
 
+    func testTiledSplitsIntoEqualCellsWithinMax() {
+        let tiles = Rect(x: 0.1, y: 0.1, w: 0.5, h: 0.2).tiled(maxW: 0.2, maxH: 0.2)
+        XCTAssertEqual(tiles.count, 3)
+        for t in tiles {
+            XCTAssertEqual(t.w, 0.5 / 3, accuracy: 1e-9)
+            XCTAssertEqual(t.h, 0.2, accuracy: 1e-9)
+        }
+        XCTAssertEqual(tiles.map(\.x).max() ?? 0, 0.1 + 2 * 0.5 / 3, accuracy: 1e-9)
+    }
+
+    func testTiledKeepsSmallRectAsIs() {
+        let r = Rect(x: 0.1, y: 0.1, w: 0.1, h: 0.1)
+        XCTAssertEqual(r.tiled(maxW: 0.2, maxH: 0.2), [r])
+    }
+
     func testLerpMovesHalfway() {
         let a = Rect(x: 0, y: 0, w: 2, h: 2)
         let b = Rect(x: 2, y: 2, w: 4, h: 4)

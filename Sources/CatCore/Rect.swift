@@ -33,6 +33,16 @@ public struct Rect: Equatable, Sendable {
         area > 0 ? intersectionArea(o) / area : 0
     }
 
+    /// 幅・高さがそれぞれ最大値以下になるよう等分割する。収まっていればそのまま
+    public func tiled(maxW: Double, maxH: Double) -> [Rect] {
+        let nx = max(1, Int((w / maxW).rounded(.up))), ny = max(1, Int((h / maxH).rounded(.up)))
+        if nx == 1 && ny == 1 { return [self] }
+        let cw = w / Double(nx), ch = h / Double(ny)
+        return (0..<ny).flatMap { j in
+            (0..<nx).map { i in Rect(x: x + Double(i) * cw, y: y + Double(j) * ch, w: cw, h: ch) }
+        }
+    }
+
     public func lerp(to o: Rect, t: Double) -> Rect {
         Rect(x: x + (o.x - x) * t, y: y + (o.y - y) * t, w: w + (o.w - w) * t, h: h + (o.h - h) * t)
     }

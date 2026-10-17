@@ -83,6 +83,24 @@ final class MaskTests: XCTestCase {
         XCTAssertEqual(cs, [Component(minX: 1, minY: 1, maxX: 3, maxY: 3, area: 5)])
     }
 
+    func testLabelMapPointsEachPixelToItsComponent() {
+        let (labels, cs) = ConnectedComponents.label(mask([
+            "#...#",
+            "#...#",
+            "#####",
+            ".....",
+            "##...",
+        ]))
+        XCTAssertEqual(cs.count, 2)
+        // ラベルは components の添字 + 1、背景は 0
+        XCTAssertEqual(labels[0], labels[4])
+        XCTAssertEqual(labels[0], labels[2 * 5 + 2])
+        XCTAssertNotEqual(labels[0], labels[4 * 5])
+        XCTAssertEqual(labels[1], 0)
+        XCTAssertEqual(cs[Int(labels[0]) - 1].area, 9)
+        XCTAssertEqual(cs[Int(labels[4 * 5]) - 1].area, 2)
+    }
+
     func testUShapeMergesIntoOneComponent() {
         // 2 本の縦棒が下で合流する。1 パス目では別ラベルになり union-find で統合される形
         let cs = ConnectedComponents.find(mask([
