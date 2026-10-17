@@ -30,10 +30,13 @@ public struct Blob: Equatable, Sendable {
     public var rect: Rect
     /// 膨張後の画素数
     public var area: Int
+    /// 形の特徴量（猫を選ぶのに使う）
+    public var shape: ShapeDescriptor?
 
-    public init(rect: Rect, area: Int) {
+    public init(rect: Rect, area: Int, shape: ShapeDescriptor? = nil) {
         self.rect = rect
         self.area = area
+        self.shape = shape
     }
 }
 
@@ -84,19 +87,22 @@ public final class MotionDetector {
         let (labels, components) = ConnectedComponents.label(mask)
         let maxW = max(1, Int(config.maxBlobWidth * Double(img.width)))
         let maxH = max(1, Int(config.maxBlobHeight * Double(img.height)))
-        var pieces: [Component] = []
+        var pieces: [(c: Component, label: Int32)] = []
         for (ci, c) in components.enumerated() where c.area >= config.minArea {
-            pieces += split(c, label: Int32(ci + 1), labels: labels, width: img.width, maxW: maxW, maxH: maxH)
+            let label = Int32(ci + 1)
+            pieces += split(c, label: label, labels: labels, width: img.width, maxW: maxW, maxH: maxH).map { ($0, label) }
         }
 
-        let fw = Double(img.width), fh = Double(img.height)
+        let fw = Double(img.width), fh = Double(img.height), w = img.width
         return pieces
-            .sorted { $0.area > $1.area }
+            .sorted { $0.c.area > $1.c.area }
             .prefix(config.maxBlobs)
-            .map { c in
-                Blob(rect: Rect(x: Double(c.minX) / fw, y: Double(c.minY) / fh,
-                                w: Double(c.maxX - c.minX + 1) / fw, h: Double(c.maxY - c.minY + 1) / fh),
-                     area: c.area)
+            .map { p in
+                let c = p.c
+                return Blob(rect: Rect(x: Double(c.minX) / fw, y: Double(c.minY) / fh,
+                                       w: Double(c.maxX - c.minX + 1) / fw, h: Double(c.maxY - c.minY + 1) / fh),
+                            area: c.area,
+                            shape: ShapeDescriptor(box: c) { x, y in labels[y * w + x] == p.label })
             }
     }
 

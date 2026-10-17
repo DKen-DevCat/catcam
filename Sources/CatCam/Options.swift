@@ -13,6 +13,8 @@ struct Options {
     var noFace = false
     /// 人物セグメンテーションを止め、背景も含めて出す
     var noPerson = false
+    /// 猫ライブラリのディレクトリ（省略時はパッケージ直下の catlib/）
+    var catlib: String?
 
     static func parse(_ args: [String]) -> Options {
         var o = Options()
@@ -27,6 +29,7 @@ struct Options {
             case "--compare-faces": o.compareFaces = true
             case "--no-face": o.noFace = true
             case "--no-person": o.noPerson = true
+            case "--catlib": o.catlib = it.next()
             default: print("unknown option: \(a)")
             }
         }

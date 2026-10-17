@@ -30,6 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let overlay = try OverlayWindow(screen: screen, device: device, source: pipeline, mirror: options.mirror)
             overlay.orderFrontRegardless()
             overlay.renderer.backgroundMode = options.noPerson ? .original : .glass
+            do {
+                let cats = try CatAtlas(directory: options.catlib.map(URL.init(fileURLWithPath:)) ?? CatAtlas.defaultDirectory,
+                                        device: device)
+                overlay.renderer.cats = cats
+                pipeline.setCatMatcher(cats.matcher)
+                print("cats: \(cats.index.entries.count)")
+            } catch {
+                print("cats: unavailable (\(error.localizedDescription)). catlib-builder で catlib/ を作ると猫に差し替わる")
+            }
             let panel = ControlPanel(pipeline: pipeline, renderer: overlay.renderer, cameraName: camera.deviceName)
             panel.makeKeyAndOrderFront(nil)
             panel.startUpdating(log: true)

@@ -6,9 +6,12 @@ import MetalKit
 private struct WindowInstance {
     /// 中身（タイトルバーを除く）の矩形。ピクセル、左上原点
     var frame: SIMD4<Float>
-    var alpha: Float
-    var kind: Float
-    var pad: SIMD2<Float> = .zero
+    /// x: 不透明度, y: 種類（0 動き / 1 顔）, z: 猫あり, w: 猫を左右反転
+    var params: SIMD4<Float>
+    /// 猫アトラス上の切り抜きの範囲（正規化・左上原点）
+    var catUV: SIMD4<Float> = .zero
+    /// 中身の矩形に対する猫の配置（0..1）
+    var catLocal: SIMD4<Float> = .zero
 }
 
 private struct Uniforms {
@@ -51,6 +54,7 @@ enum BackgroundMode: Int, CaseIterable {
 final class Renderer: NSObject, MTKViewDelegate {
     var mirror: Bool
     var backgroundMode = BackgroundMode.glass
+    var cats: CatAtlas?
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
@@ -121,6 +125,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
                     encoder.setFragmentTexture(texture, index: 0)
                     encoder.setFragmentTexture(mask ?? texture, index: 1)
+                    encoder.setFragmentTexture(cats?.texture ?? texture, index: 2)
                     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: instances.count)
                 }
             }
@@ -172,17 +177,21 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private func instances(for scene: Scene, uniforms u: Uniforms) -> [WindowInstance] {
         var out: [WindowInstance] = []
-        func add(_ r: Rect, alpha: Double, kind: Float, minSize: Float) {
+        func add(_ r: Rect, alpha: Double, kind: Float, minSize: Float, cat: CatMatcher.Match? = nil) {
             guard alpha > 0.01 else { return }
-            out.append(WindowInstance(frame: screenFrame(r, u, minSize: minSize * u.scale), alpha: Float(alpha), kind: kind))
+            let frame = screenFrame(r, u, minSize: minSize * u.scale)
+            var w = WindowInstance(frame: frame, params: SIMD4(Float(alpha), kind, 0, 0))
+            if let cat, let entry = cats?.index.entries[cat.index] {
+                // 形はカメラ座標で選んでいるので、画面を左右反転して表示するなら猫も反転させる
+                w.params.z = 1
+                w.params.w = cat.mirrored != mirror ? 1 : 0
+                w.catUV = SIMD4(Float(entry.uv.x), Float(entry.uv.y), Float(entry.uv.w), Float(entry.uv.h))
+                w.catLocal = Self.fit(catAspect: entry.uv.w / entry.uv.h, into: Double(frame.z / frame.w))
+            }
+            out.append(w)
         }
         for t in scene.tracks {
-            // 残像: 古いほど薄く、奥に描く
-            let n = Double(t.history.count + 1)
-            for (i, h) in t.history.enumerated() {
-                add(h, alpha: t.alpha * 0.6 * Double(i + 1) / n, kind: 0, minSize: 36)
-            }
-            add(t.rect, alpha: t.alpha, kind: 0, minSize: 36)
+            add(t.rect, alpha: t.alpha, kind: 0, minSize: 36, cat: scene.cats[t.id])
         }
         for f in scene.faceTracks {
             add(f.rect, alpha: f.alpha, kind: 1, minSize: 80)
@@ -192,6 +201,20 @@ final class Renderer: NSObject, MTKViewDelegate {
             add(f.rect, alpha: f.alpha, kind: 0, minSize: 24)
         }
         return out
+    }
+
+    /// 猫を中身いっぱいに引き伸ばす。ただし縦横の歪みは 1.25 倍までにし、超える分は余白にする
+    private static func fit(catAspect: Double, into windowAspect: Double) -> SIMD4<Float> {
+        let ratio = windowAspect / catAspect, limit = 1.25
+        if ratio > limit {
+            let w = limit / ratio
+            return SIMD4(Float((1 - w) / 2), 0, Float(w), 1)
+        }
+        if ratio < 1 / limit {
+            let h = ratio * limit
+            return SIMD4(0, Float(1 - h), 1, Float(h))  // 縦に余る時は下に寄せる（床に立つ見た目）
+        }
+        return SIMD4(0, 0, 1, 1)
     }
 
     private func screenFrame(_ r: Rect, _ u: Uniforms, minSize: Float) -> SIMD4<Float> {
@@ -209,7 +232,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     #include <metal_stdlib>
     using namespace metal;
 
-    struct Instance { float4 frame; float alpha; float kind; float2 pad; };
+    struct Instance { float4 frame; float4 params; float4 catUV; float4 catLocal; };
     struct Uniforms {
         float2 viewport; float2 camK; float2 camB;
         float titleH; float radius; float shadow; float mirror; float scale; float hasMask;
@@ -244,9 +267,11 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     fragment float4 window_fragment(VOut in [[stage_in]], constant Instance *inst [[buffer(0)]],
                                     constant Uniforms &u [[buffer(1)]], texture2d<float> cam [[texture(0)]],
-                                    texture2d<float> personMask [[texture(1)]]) {
+                                    texture2d<float> personMask [[texture(1)]], texture2d<float> catAtlas [[texture(2)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         Instance i = inst[in.inst];
+        float alpha = i.params.x;
+        bool hasCat = i.params.z > 0.5;
         float4 b = bodyRect(i, u);
         float2 c = b.xy + b.zw * 0.5, hs = b.zw * 0.5;
 
@@ -273,7 +298,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             if (u.mirror > 0.5) uv.x = 1 - uv.x;
             col = cam.sample(s, uv).rgb;
             if (u.hasMask > 0.5) {
-                float m = smoothstep(0.3, 0.7, personMask.sample(s, uv).r);
+                // 猫に差し替えるウィンドウでは人物を消し、背景だけにする
+                float m = hasCat ? 0.0 : smoothstep(0.3, 0.7, personMask.sample(s, uv).r);
                 int mode = int(u.bgMode + 0.5);
                 if (mode == 0) {
                     // 透明: 人物だけ
@@ -293,11 +319,21 @@ final class Renderer: NSObject, MTKViewDelegate {
                     col = mix(acc / 12.0, col, m);
                 }
             }
+            if (hasCat) {
+                float2 local = (in.pixel - i.frame.xy) / i.frame.zw;
+                float2 cl = (local - i.catLocal.xy) / i.catLocal.zw;
+                if (all(cl >= 0.0) && all(cl <= 1.0)) {
+                    if (i.params.w > 0.5) cl.x = 1 - cl.x;
+                    float4 cat = catAtlas.sample(s, i.catUV.xy + cl * i.catUV.zw);
+                    col = mix(col, cat.rgb, cat.a);
+                    contentAlpha = cat.a + contentAlpha * (1 - cat.a);
+                }
+            }
         }
 
-        float a = inside * i.alpha * contentAlpha;
-        float body = inside * i.alpha;
-        return float4(col * a, a + shadow * (1 - body) * i.alpha);
+        float a = inside * alpha * contentAlpha;
+        float body = inside * alpha;
+        return float4(col * a, a + shadow * (1 - body) * alpha);
     }
     """
 }

@@ -8,6 +8,8 @@ struct Scene {
     var pixelBuffer: CVPixelBuffer?
     /// 動きのウィンドウ（顔の部分は除く）
     var tracks: [Track] = []
+    /// 動きのウィンドウ ID → 差し替える猫
+    var cats: [Int: CatMatcher.Match] = [:]
     /// 顔（パーツは M4 の猫顔合わせ用に保持するだけで、ウィンドウにはしない）
     var faces: [Face] = []
     /// 顔のウィンドウ。動きと同じく湧いた場所から動かない
@@ -46,6 +48,10 @@ final class Pipeline {
     private let faceFillTracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0))
     /// はみ出し部分を埋めるウィンドウの最大サイズ（通常の最大サイズに対する比率）
     private let faceFillScale = 0.35
+    // 以下は queue 上でのみ触る。ウィンドウは動かないので、猫は湧いた瞬間の形で一度だけ選ぶ
+    private var catMatcher: CatMatcher?
+    private var catsEnabled = true
+    private var cats: [Int: CatMatcher.Match] = [:]
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
@@ -68,6 +74,14 @@ final class Pipeline {
 
     func setMaxWindow(_ v: Double) {
         queue.async { [self] in maxWindow = v }
+    }
+
+    func setCatMatcher(_ m: CatMatcher?) {
+        queue.async { [self] in catMatcher = m }
+    }
+
+    func setCatsEnabled(_ on: Bool) {
+        queue.async { [self] in catsEnabled = on }
     }
 
     func setPersonEnabled(_ on: Bool) {
@@ -97,15 +111,31 @@ final class Pipeline {
         // 顔は専用のウィンドウで出すので、顔の動きは動きのウィンドウにしない
         let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faces.map { $0.rect.padded(0.15) })
         let tracks = tracker.update(blobs: blobs)
+        assignCats(tracks: tracks, blobs: blobs)
         let faceTracks = faceTracker.update(blobs: faces.map { Blob(rect: $0.rect.padded(0.15), area: 0) })
         let faceFillTracks = faceFillTracker.update(blobs: faceFill(faces: faces, windows: faceTracks, aspect: aspect))
         stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count,
                           area: blobs.reduce(0) { $0 + $1.area }, frozen: tracks.contains { $0.frozen })
 
         lock.lock()
-        current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,
+        current = Scene(pixelBuffer: pb, tracks: tracks, cats: catsEnabled ? cats : [:], faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,
                         personMask: person?.mask, personMaskVersion: person?.version ?? 0)
         lock.unlock()
+    }
+
+    /// 新しく湧いたウィンドウに、湧いた瞬間の塊の形で猫を割り当てる。画面に出ている猫とは重複させない
+    private func assignCats(tracks: [Track], blobs: [Blob]) {
+        let alive = Set(tracks.map(\.id))
+        cats = cats.filter { alive.contains($0.key) }
+        guard let catMatcher else { return }
+        var used = Set(cats.values.map(\.index))
+        for t in tracks where cats[t.id] == nil {
+            // 追従しない設定なので、湧いた直後のトラックの矩形は塊の矩形と一致する
+            guard let shape = blobs.first(where: { $0.rect == t.rect })?.shape,
+                  let match = catMatcher.best(for: shape, excluding: used) else { continue }
+            cats[t.id] = match
+            used.insert(match.index)
+        }
     }
 
     /// 顔のうち、今表示中の顔ウィンドウに覆われていない部分を小さいマスに分けて返す。

@@ -18,6 +18,11 @@ public struct ShapeDescriptor: Equatable, Codable, Sendable {
 
     /// `box` の範囲だけを見て特徴量を作る。`box.area` は前景画素数
     public init(mask: BinaryMask, box: Component) {
+        self.init(box: box) { x, y in mask[x, y] }
+    }
+
+    /// 前景の判定を関数で与える版（連結成分のラベルで、同じ箱に入った別の成分を除くため）
+    public init(box: Component, isOn: (Int, Int) -> Bool) {
         let g = Self.grid
         let bw = box.maxX - box.minX + 1, bh = box.maxY - box.minY + 1
         var bits = [UInt64](repeating: 0, count: 4)
@@ -25,7 +30,7 @@ public struct ShapeDescriptor: Equatable, Codable, Sendable {
             let y = box.minY + Int((Double(row) + 0.5) * Double(bh) / Double(g))
             for col in 0..<g {
                 let x = box.minX + Int((Double(col) + 0.5) * Double(bw) / Double(g))
-                if mask[x, y] {
+                if isOn(x, y) {
                     let i = row * g + col
                     bits[i / 64] |= 1 << UInt64(i % 64)
                 }

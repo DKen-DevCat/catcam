@@ -11,7 +11,7 @@ final class ControlPanel: NSPanel {
     init(pipeline: Pipeline, renderer: Renderer, cameraName: String) {
         self.pipeline = pipeline
         self.renderer = renderer
-        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 380),
+        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 410),
                    styleMask: [.titled, .utilityWindow], backing: .buffered, defer: false)
         title = "catcam — \(cameraName)"
         level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
@@ -21,6 +21,9 @@ final class ControlPanel: NSPanel {
         let sensitivity = NSSlider(value: 0.7, minValue: 0.05, maxValue: 0.98, target: self, action: #selector(sensitivityChanged(_:)))
         let minSize = NSSlider(value: 20, minValue: 4, maxValue: 400, target: self, action: #selector(minSizeChanged(_:)))
         let maxWindow = NSSlider(value: 0.25, minValue: 0.08, maxValue: 0.8, target: self, action: #selector(maxWindowChanged(_:)))
+        let cats = NSButton(checkboxWithTitle: "Cats（動きを猫に差し替える）", target: self, action: #selector(catsChanged(_:)))
+        cats.state = renderer.cats == nil ? .off : .on
+        cats.isEnabled = renderer.cats != nil
         let mirror = NSButton(checkboxWithTitle: "Mirror", target: self, action: #selector(mirrorChanged(_:)))
         mirror.state = renderer.mirror ? .on : .off
         let background = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -38,7 +41,7 @@ final class ControlPanel: NSPanel {
             NSTextField(labelWithString: "Minimum size"), minSize,
             NSTextField(labelWithString: "Max window size（超えたら分割）"), maxWindow,
             NSTextField(labelWithString: "背景"), background,
-            mirror, effects, quit,
+            cats, mirror, effects, quit,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -70,6 +73,10 @@ final class ControlPanel: NSPanel {
 
     @objc private func maxWindowChanged(_ s: NSSlider) {
         pipeline.setMaxWindow(s.doubleValue)
+    }
+
+    @objc private func catsChanged(_ b: NSButton) {
+        pipeline.setCatsEnabled(b.state == .on)
     }
 
     @objc private func mirrorChanged(_ b: NSButton) {
