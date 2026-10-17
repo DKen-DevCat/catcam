@@ -108,6 +108,20 @@ final class TrackerTests: XCTestCase {
         XCTAssertTrue(tracks[0].frozen)
     }
 
+    func testZeroSmoothingKeepsWindowsWhereTheySpawned() {
+        // 動きに追従しない: 重なる動きがある間は同じ場所に残り、離れたら新しく湧く
+        let t = Tracker(config: TrackerConfig(iouThreshold: 0.3, maxMissed: 3, historyLength: 0, historyInterval: 1, smoothing: 0))
+        let first = t.update(blobs: [blob(0.10, 0.1)])
+        let stay = t.update(blobs: [blob(0.12, 0.1)])
+        XCTAssertEqual(stay.map(\.id), first.map(\.id))
+        XCTAssertEqual(stay[0].rect.x, 0.10, accuracy: 1e-9)
+
+        let moved = t.update(blobs: [blob(0.17, 0.1)])
+        XCTAssertEqual(moved.count, 2, "元の場所に残ったまま、新しい場所に湧く")
+        XCTAssertEqual(moved.first { $0.id == first[0].id }?.rect.x ?? 0, 0.10, accuracy: 1e-9)
+        XCTAssertEqual(moved.first { $0.id != first[0].id }?.rect.x ?? 0, 0.17, accuracy: 1e-9)
+    }
+
     func testSmoothingBlendsTowardNewPosition() {
         let t = Tracker(config: TrackerConfig(iouThreshold: 0.1, maxMissed: 3, historyLength: 0, historyInterval: 1, smoothing: 0.5))
         _ = t.update(blobs: [blob(0.10, 0.1)])

@@ -8,7 +8,7 @@ struct Scene {
     var pixelBuffer: CVPixelBuffer?
     /// 動きのウィンドウ（顔の部分は除く）
     var tracks: [Track] = []
-    /// 顔全体 1 枚と、目・鼻・口のパーツ
+    /// 顔（パーツは M4 の猫顔合わせ用に保持するだけで、ウィンドウにはしない）
     var faces: [Face] = []
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
@@ -30,8 +30,10 @@ final class Pipeline {
     private let motion = MotionDetector()
     /// ウィンドウの最大サイズ（映像の高さに対する比率）。queue 上でのみ触る
     private var maxWindow = 0.25
-    // 動きが止まったらウィンドウをその場に固定し、再び動いたら動いた部分だけに入れ替える
-    private let tracker = Tracker(config: TrackerConfig(freezeWhenIdle: true, idleArea: 30))
+    // ウィンドウは動いた場所に湧くだけで追従しない（smoothing 0）。重なる動きが続く間は残り、離れたら新しく湧く。
+    // 動きが止まったらその場に固定し、再び動いたら動いた部分だけに入れ替える
+    private let tracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0,
+                                                        freezeWhenIdle: true, idleArea: 30))
     private let faceSmoother = FaceSmoother(smoothing: 0.5)
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
