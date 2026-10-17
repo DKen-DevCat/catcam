@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 
 /// 計測値の表示と最小限の調整。M5 で SwiftUI のパネルに置き換える
 final class ControlPanel: NSPanel {
@@ -10,7 +11,7 @@ final class ControlPanel: NSPanel {
     init(pipeline: Pipeline, renderer: Renderer, cameraName: String) {
         self.pipeline = pipeline
         self.renderer = renderer
-        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 230),
+        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 300),
                    styleMask: [.titled, .utilityWindow], backing: .buffered, defer: false)
         title = "catcam — \(cameraName)"
         level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
@@ -21,13 +22,17 @@ final class ControlPanel: NSPanel {
         let minSize = NSSlider(value: 20, minValue: 4, maxValue: 400, target: self, action: #selector(minSizeChanged(_:)))
         let mirror = NSButton(checkboxWithTitle: "Mirror", target: self, action: #selector(mirrorChanged(_:)))
         mirror.state = renderer.mirror ? .on : .off
+        let person = NSButton(checkboxWithTitle: "Person only（背景を消す）", target: self, action: #selector(personChanged(_:)))
+        person.state = pipeline.personEnabled ? .on : .off
+        // リアクション等のビデオエフェクトはプロセス内で重い検出を走らせるので、ここから切れるようにする
+        let effects = NSButton(title: "Video Effects…（リアクションを切る）", target: self, action: #selector(showVideoEffects))
         let quit = NSButton(title: "Quit (esc)", target: NSApp, action: #selector(NSApplication.terminate(_:)))
 
         let stack = NSStackView(views: [
             statsLabel,
             NSTextField(labelWithString: "Sensitivity"), sensitivity,
             NSTextField(labelWithString: "Minimum size"), minSize,
-            mirror, quit,
+            mirror, person, effects, quit,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -59,5 +64,13 @@ final class ControlPanel: NSPanel {
 
     @objc private func mirrorChanged(_ b: NSButton) {
         renderer.mirror = b.state == .on
+    }
+
+    @objc private func personChanged(_ b: NSButton) {
+        pipeline.setPersonEnabled(b.state == .on)
+    }
+
+    @objc private func showVideoEffects() {
+        AVCaptureDevice.showSystemUserInterface(.videoEffects)
     }
 }

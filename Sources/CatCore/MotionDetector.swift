@@ -41,7 +41,9 @@ public final class MotionDetector {
         self.config = config
     }
 
-    public func process(_ img: GrayImage) -> [Blob] {
+    /// `gate` を渡すと、その true の画素で起きた動きだけを拾う（人物マスクで背景の動きを無視する用途）。
+    /// サイズが `img` と違うマスクは無視する
+    public func process(_ img: GrayImage, gate: BinaryMask? = nil) -> [Blob] {
         if size != (img.width, img.height) || background.isEmpty {
             size = (img.width, img.height)
             background = img.pixels.map(Float.init)
@@ -49,10 +51,11 @@ public final class MotionDetector {
         }
 
         let t = config.threshold, a = config.backgroundAlpha
+        let gate = gate.flatMap { $0.width == img.width && $0.height == img.height ? $0 : nil }
         var mask = BinaryMask(width: img.width, height: img.height)
         for i in 0..<img.pixels.count {
             let v = Float(img.pixels[i])
-            mask.bits[i] = abs(v - background[i]) > t
+            mask.bits[i] = abs(v - background[i]) > t && (gate?.bits[i] ?? true)
             background[i] += (v - background[i]) * a
         }
         for _ in 0..<config.dilateIterations {

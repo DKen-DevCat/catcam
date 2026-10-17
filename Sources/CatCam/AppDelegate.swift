@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pipeline.useSystemFaces = camera.providesFaces && !options.visionFaces
             pipeline.compareFaces = options.compareFaces
             pipeline.faceEnabled = !options.noFace
+            pipeline.personEnabled = !options.noPerson
             let overlay = try OverlayWindow(screen: screen, device: device, source: pipeline, mirror: options.mirror)
             overlay.orderFrontRegardless()
             let panel = ControlPanel(pipeline: pipeline, renderer: overlay.renderer, cameraName: camera.deviceName)

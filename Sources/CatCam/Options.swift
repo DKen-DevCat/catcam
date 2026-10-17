@@ -11,6 +11,8 @@ struct Options {
     var compareFaces = false
     /// 顔検出を止める（計測用）
     var noFace = false
+    /// 人物セグメンテーションを止め、背景も含めて出す
+    var noPerson = false
 
     static func parse(_ args: [String]) -> Options {
         var o = Options()
@@ -24,6 +26,7 @@ struct Options {
             case "--vision-faces": o.visionFaces = true
             case "--compare-faces": o.compareFaces = true
             case "--no-face": o.noFace = true
+            case "--no-person": o.noPerson = true
             default: print("unknown option: \(a)")
             }
         }

@@ -70,6 +70,28 @@ final class MotionDetectorTests: XCTestCase {
         XCTAssertTrue(last.isEmpty, "静止した物体はいずれ背景に溶ける")
     }
 
+    func testGateIgnoresMotionOutsidePerson() {
+        let d = detector()
+        _ = d.process(frame())
+        var person = BinaryMask(width: w, height: h)
+        for y in 0..<h {
+            for x in 20..<w {
+                person[x, y] = true
+            }
+        }
+        // 左の四角は人物外、右の四角は人物内
+        let blobs = d.process(frame(squares: [(3, 6, 4), (28, 6, 4)]), gate: person)
+        XCTAssertEqual(blobs.count, 1)
+        XCTAssertGreaterThan(blobs[0].rect.x, 0.5)
+    }
+
+    func testGateWithDifferentSizeIsIgnored() {
+        let d = detector()
+        _ = d.process(frame())
+        let blobs = d.process(frame(squares: [(3, 6, 4)]), gate: BinaryMask(width: 2, height: 2))
+        XCTAssertEqual(blobs.count, 1, "サイズが合わないマスクでは絞り込まない")
+    }
+
     func testBlobsMostlyInsideFaceAreExcluded() {
         let inFace = Blob(rect: Rect(x: 0.2, y: 0.2, w: 0.1, h: 0.1), area: 1)
         // 顔に覆われるのは 4 割

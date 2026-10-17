@@ -11,6 +11,8 @@ final class Stats {
     private var frameMsMax = 0.0
     private var faceMsSum = 0.0
     private var faceRuns = 0
+    private var personMsSum = 0.0
+    private var personRuns = 0
     private var blobs = 0
     private var tracks = 0
     private var start = CACurrentMediaTime()
@@ -33,6 +35,13 @@ final class Stats {
         lock.unlock()
     }
 
+    func recordPerson(ms: Double) {
+        lock.lock()
+        personMsSum += ms
+        personRuns += 1
+        lock.unlock()
+    }
+
     func recordRender() {
         lock.lock()
         renderFrames += 1
@@ -45,10 +54,11 @@ final class Stats {
         let now = CACurrentMediaTime(), cpu = Stats.cpuSeconds()
         let dt = max(now - start, 1e-6)
         let line = String(
-            format: "cam %.1ffps  render %.1ffps  detect %.2fms (max %.2f)  face %.1fms@%.1fHz  blobs %d  tracks %d  cpu %.1f%%",
+            format: "cam %.1ffps  render %.1ffps  detect %.2fms (max %.2f)  face %.1fms@%.1fHz  person %.1fms@%.1fHz  blobs %d  tracks %d  cpu %.1f%%",
             Double(camFrames) / dt, Double(renderFrames) / dt,
             camFrames > 0 ? frameMsSum / Double(camFrames) : 0, frameMsMax,
             faceRuns > 0 ? faceMsSum / Double(faceRuns) : 0, Double(faceRuns) / dt,
+            personRuns > 0 ? personMsSum / Double(personRuns) : 0, Double(personRuns) / dt,
             blobs, tracks, (cpu - cpuStart) / dt * 100
         )
         camFrames = 0
@@ -57,6 +67,8 @@ final class Stats {
         frameMsMax = 0
         faceMsSum = 0
         faceRuns = 0
+        personMsSum = 0
+        personRuns = 0
         start = now
         cpuStart = cpu
         return line

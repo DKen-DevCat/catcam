@@ -21,7 +21,8 @@ private struct Uniforms {
     var shadow: Float
     var mirror: Float
     var scale: Float
-    var pad: Float = 0
+    /// 1 なら人物マスクで中身を切り抜く
+    var hasMask: Float = 0
 }
 
 /// 全画面オーバーレイに偽ウィンドウを描く。全ウィンドウが同じカメラテクスチャを参照するのでコピーは発生しない
@@ -32,6 +33,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let pipelineState: MTLRenderPipelineState
     private let textureCache: CVMetalTextureCache
     private let source: Pipeline
+    // 人物マスクは小さい（数百 KB）ので、更新された時だけ CPU からテクスチャに書き込む
+    private var maskTexture: MTLTexture?
+    private var maskVersion = -1
 
     init(view: MTKView, source: Pipeline, mirror: Bool) throws {
         guard let device = view.device, let queue = device.makeCommandQueue() else {
@@ -81,6 +85,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             if let cvTexture, let texture = CVMetalTextureGetTexture(cvTexture) {
                 let scale = Float(view.window?.backingScaleFactor ?? 2)
                 var u = uniforms(viewport: view.drawableSize, camera: CGSize(width: w, height: h), scale: scale)
+                let mask = updateMask(scene)
+                u.hasMask = mask == nil ? 0 : 1
                 var instances = self.instances(for: scene, uniforms: u)
                 if !instances.isEmpty,
                    let buffer = device.makeBuffer(bytes: &instances, length: MemoryLayout<WindowInstance>.stride * instances.count) {
@@ -90,6 +96,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     encoder.setFragmentBuffer(buffer, offset: 0, index: 0)
                     encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
                     encoder.setFragmentTexture(texture, index: 0)
+                    encoder.setFragmentTexture(mask ?? texture, index: 1)
                     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: instances.count)
                 }
             }
@@ -100,6 +107,26 @@ final class Renderer: NSObject, MTKViewDelegate {
         cmd.addCompletedHandler { _ in _ = cvTexture }
         cmd.commit()
         source.stats.recordRender()
+    }
+
+    private func updateMask(_ scene: Scene) -> MTLTexture? {
+        guard let pb = scene.personMask else { return nil }
+        if scene.personMaskVersion == maskVersion, let maskTexture { return maskTexture }
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+        if maskTexture?.width != w || maskTexture?.height != h {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: w, height: h, mipmapped: false)
+            desc.usage = .shaderRead
+            maskTexture = device.makeTexture(descriptor: desc)
+        }
+        guard let maskTexture else { return nil }
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        if let base = CVPixelBufferGetBaseAddress(pb) {
+            maskTexture.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                                withBytes: base, bytesPerRow: CVPixelBufferGetBytesPerRow(pb))
+        }
+        CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+        maskVersion = scene.personMaskVersion
+        return maskTexture
     }
 
     /// カメラ映像を画面いっぱいに（はみ出す側を切って）対応付ける
@@ -157,7 +184,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     struct Instance { float4 frame; float alpha; float kind; float2 pad; };
     struct Uniforms {
         float2 viewport; float2 camK; float2 camB;
-        float titleH; float radius; float shadow; float mirror; float scale; float pad;
+        float titleH; float radius; float shadow; float mirror; float scale; float hasMask;
     };
     struct VOut { float4 position [[position]]; float2 pixel; uint inst [[flat]]; };
 
@@ -187,7 +214,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     fragment float4 window_fragment(VOut in [[stage_in]], constant Instance *inst [[buffer(0)]],
-                                    constant Uniforms &u [[buffer(1)]], texture2d<float> cam [[texture(0)]]) {
+                                    constant Uniforms &u [[buffer(1)]], texture2d<float> cam [[texture(0)]],
+                                    texture2d<float> personMask [[texture(1)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         Instance i = inst[in.inst];
         float4 b = bodyRect(i, u);
@@ -199,6 +227,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         float shadow = 0.45 * (1 - smoothstep(-u.shadow * 0.3, u.shadow, ds));
 
         float3 col;
+        float contentAlpha = 1;
         if (in.pixel.y < i.frame.y) {
             // タイトルバーと信号ボタン（非アクティブ色）
             col = float3(0.16, 0.16, 0.17);
@@ -214,10 +243,17 @@ final class Renderer: NSObject, MTKViewDelegate {
             float2 uv = in.pixel / u.viewport * u.camK + u.camB;
             if (u.mirror > 0.5) uv.x = 1 - uv.x;
             col = cam.sample(s, uv).rgb;
+            if (u.hasMask > 0.5) {
+                // 人物以外は暗いすりガラス風にして、背景の部屋を見せない
+                float m = smoothstep(0.3, 0.7, personMask.sample(s, uv).r);
+                col = mix(float3(0.08, 0.08, 0.09), col, m);
+                contentAlpha = mix(0.22, 1.0, m);
+            }
         }
 
-        float a = inside * i.alpha;
-        return float4(col * a, a + shadow * (1 - inside) * i.alpha);
+        float a = inside * i.alpha * contentAlpha;
+        float body = inside * i.alpha;
+        return float4(col * a, a + shadow * (1 - body) * i.alpha);
     }
     """
 }
