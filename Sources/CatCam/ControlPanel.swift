@@ -11,7 +11,7 @@ final class ControlPanel: NSPanel {
     init(pipeline: Pipeline, renderer: Renderer, cameraName: String) {
         self.pipeline = pipeline
         self.renderer = renderer
-        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 340),
+        super.init(contentRect: NSRect(x: 40, y: 120, width: 300, height: 380),
                    styleMask: [.titled, .utilityWindow], backing: .buffered, defer: false)
         title = "catcam — \(cameraName)"
         level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
@@ -23,10 +23,13 @@ final class ControlPanel: NSPanel {
         let maxWindow = NSSlider(value: 0.25, minValue: 0.08, maxValue: 0.8, target: self, action: #selector(maxWindowChanged(_:)))
         let mirror = NSButton(checkboxWithTitle: "Mirror", target: self, action: #selector(mirrorChanged(_:)))
         mirror.state = renderer.mirror ? .on : .off
-        let person = NSButton(checkboxWithTitle: "Person only（背景を消す）", target: self, action: #selector(personChanged(_:)))
-        person.state = pipeline.personEnabled ? .on : .off
-        // リアクション等のビデオエフェクトはプロセス内で重い検出を走らせるので、ここから切れるようにする
-        let effects = NSButton(title: "Video Effects…（リアクションを切る）", target: self, action: #selector(showVideoEffects))
+        let background = NSPopUpButton(frame: .zero, pullsDown: false)
+        background.addItems(withTitles: BackgroundMode.allCases.map(\.label))
+        background.selectItem(at: renderer.backgroundMode.rawValue)
+        background.target = self
+        background.action = #selector(backgroundChanged(_:))
+        // リアクション・背景などのビデオエフェクトはプロセス内で重い処理を走らせるので、ここから切れるようにする
+        let effects = NSButton(title: "Video Effects…（macOS のリアクション・背景を切る）", target: self, action: #selector(showVideoEffects))
         let quit = NSButton(title: "Quit (esc)", target: NSApp, action: #selector(NSApplication.terminate(_:)))
 
         let stack = NSStackView(views: [
@@ -34,12 +37,13 @@ final class ControlPanel: NSPanel {
             NSTextField(labelWithString: "Sensitivity"), sensitivity,
             NSTextField(labelWithString: "Minimum size"), minSize,
             NSTextField(labelWithString: "Max window size（超えたら分割）"), maxWindow,
-            mirror, person, effects, quit,
+            NSTextField(labelWithString: "背景"), background,
+            mirror, effects, quit,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        for v in [statsLabel, sensitivity, minSize, maxWindow] {
+        for v in [statsLabel, sensitivity, minSize, maxWindow, background] {
             v.widthAnchor.constraint(equalToConstant: 276).isActive = true
         }
         contentView = stack
@@ -72,8 +76,11 @@ final class ControlPanel: NSPanel {
         renderer.mirror = b.state == .on
     }
 
-    @objc private func personChanged(_ b: NSButton) {
-        pipeline.setPersonEnabled(b.state == .on)
+    @objc private func backgroundChanged(_ p: NSPopUpButton) {
+        guard let mode = BackgroundMode(rawValue: p.indexOfSelectedItem) else { return }
+        renderer.backgroundMode = mode
+        // 「そのまま」では人物切り抜きを止めて軽くする
+        pipeline.setPersonEnabled(mode.needsPersonMask)
     }
 
     @objc private func showVideoEffects() {

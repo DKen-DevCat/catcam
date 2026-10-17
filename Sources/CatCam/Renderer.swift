@@ -23,11 +23,34 @@ private struct Uniforms {
     var scale: Float
     /// 1 なら人物マスクで中身を切り抜く
     var hasMask: Float = 0
+    /// BackgroundMode の rawValue
+    var bgMode: Float = 0
+    var pad1: Float = 0
+    var pad2: Float = 0
+    var pad3: Float = 0
+}
+
+/// ウィンドウの中の、人物以外の部分の見せ方
+enum BackgroundMode: Int, CaseIterable {
+    case transparent, glass, blur, original
+
+    var label: String {
+        switch self {
+        case .transparent: "透明（人物だけ）"
+        case .glass: "すりガラス"
+        case .blur: "ぼかし"
+        case .original: "そのまま（人物切り抜きなし・軽い）"
+        }
+    }
+
+    /// 人物セグメンテーションが要るか
+    var needsPersonMask: Bool { self != .original }
 }
 
 /// 全画面オーバーレイに偽ウィンドウを描く。全ウィンドウが同じカメラテクスチャを参照するのでコピーは発生しない
 final class Renderer: NSObject, MTKViewDelegate {
     var mirror: Bool
+    var backgroundMode = BackgroundMode.glass
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
@@ -86,7 +109,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                 let scale = Float(view.window?.backingScaleFactor ?? 2)
                 var u = uniforms(viewport: view.drawableSize, camera: CGSize(width: w, height: h), scale: scale)
                 let mask = updateMask(scene)
-                u.hasMask = mask == nil ? 0 : 1
+                u.hasMask = mask == nil || !backgroundMode.needsPersonMask ? 0 : 1
+                u.bgMode = Float(backgroundMode.rawValue)
                 var instances = self.instances(for: scene, uniforms: u)
                 if !instances.isEmpty,
                    let buffer = device.makeBuffer(bytes: &instances, length: MemoryLayout<WindowInstance>.stride * instances.count) {
@@ -163,6 +187,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         for f in scene.faceTracks {
             add(f.rect, alpha: f.alpha, kind: 1, minSize: 80)
         }
+        // はみ出し部分の小窓は顔ウィンドウの上に重ねる
+        for f in scene.faceFillTracks {
+            add(f.rect, alpha: f.alpha, kind: 0, minSize: 24)
+        }
         return out
     }
 
@@ -185,6 +213,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     struct Uniforms {
         float2 viewport; float2 camK; float2 camB;
         float titleH; float radius; float shadow; float mirror; float scale; float hasMask;
+        float bgMode; float pad1; float pad2; float pad3;
     };
     struct VOut { float4 position [[position]]; float2 pixel; uint inst [[flat]]; };
 
@@ -244,10 +273,25 @@ final class Renderer: NSObject, MTKViewDelegate {
             if (u.mirror > 0.5) uv.x = 1 - uv.x;
             col = cam.sample(s, uv).rgb;
             if (u.hasMask > 0.5) {
-                // 人物以外は暗いすりガラス風にして、背景の部屋を見せない
                 float m = smoothstep(0.3, 0.7, personMask.sample(s, uv).r);
-                col = mix(float3(0.08, 0.08, 0.09), col, m);
-                contentAlpha = mix(0.22, 1.0, m);
+                int mode = int(u.bgMode + 0.5);
+                if (mode == 0) {
+                    // 透明: 人物だけ
+                    contentAlpha = m;
+                } else if (mode == 1) {
+                    // すりガラス: 暗く薄く残してウィンドウの形は見せる
+                    col = mix(float3(0.08, 0.08, 0.09), col, m);
+                    contentAlpha = mix(0.22, 1.0, m);
+                } else {
+                    // ぼかし: 周囲 12 点の平均（2 重の輪）
+                    float3 acc = 0;
+                    for (int k = 0; k < 12; k++) {
+                        float ang = 6.2831853 * float(k) / 6.0;
+                        float rad = k < 6 ? 0.012 : 0.024;
+                        acc += cam.sample(s, uv + rad * float2(cos(ang), sin(ang) * 16.0 / 9.0)).rgb;
+                    }
+                    col = mix(acc / 12.0, col, m);
+                }
             }
         }
 

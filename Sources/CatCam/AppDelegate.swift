@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pipeline.personEnabled = !options.noPerson
             let overlay = try OverlayWindow(screen: screen, device: device, source: pipeline, mirror: options.mirror)
             overlay.orderFrontRegardless()
+            overlay.renderer.backgroundMode = options.noPerson ? .original : .glass
             let panel = ControlPanel(pipeline: pipeline, renderer: overlay.renderer, cameraName: camera.deviceName)
             panel.makeKeyAndOrderFront(nil)
             panel.startUpdating(log: true)

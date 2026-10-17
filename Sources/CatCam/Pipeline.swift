@@ -12,6 +12,8 @@ struct Scene {
     var faces: [Face] = []
     /// 顔のウィンドウ。動きと同じく湧いた場所から動かない
     var faceTracks: [Track] = []
+    /// 顔が顔ウィンドウからはみ出した部分を埋める小さいウィンドウ
+    var faceFillTracks: [Track] = []
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
     var personMaskVersion = 0
@@ -39,6 +41,10 @@ final class Pipeline {
     private let faceSmoother = FaceSmoother(smoothing: 0.5)
     // 顔も追従しない。顔が枠から外れるほど動いたら新しい場所に湧き、古い枠は消えていく
     private let faceTracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0))
+    // はみ出し部分の小さいウィンドウも湧いた場所から動かない
+    private let faceFillTracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0))
+    /// はみ出し部分を埋めるウィンドウの最大サイズ（通常の最大サイズに対する比率）
+    private let faceFillScale = 0.35
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
@@ -91,12 +97,24 @@ final class Pipeline {
         let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faces.map { $0.rect.padded(0.15) })
         let tracks = tracker.update(blobs: blobs)
         let faceTracks = faceTracker.update(blobs: faces.map { Blob(rect: $0.rect.padded(0.15), area: 0) })
+        let faceFillTracks = faceFillTracker.update(blobs: faceFill(faces: faces, windows: faceTracks, aspect: aspect))
         stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count)
 
         lock.lock()
-        current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces, faceTracks: faceTracks,
+        current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,
                         personMask: person?.mask, personMaskVersion: person?.version ?? 0)
         lock.unlock()
+    }
+
+    /// 顔のうち、今表示中の顔ウィンドウに覆われていない部分を小さいマスに分けて返す。
+    /// 細すぎる帯は捨てる（わずかなズレで小窓が湧かないように）
+    private func faceFill(faces: [Face], windows: [Track], aspect: Double) -> [Blob] {
+        let live = windows.filter { $0.missed == 0 }.map(\.rect)
+        let maxH = maxWindow * faceFillScale, maxW = maxH * aspect
+        return faces.map(\.rect).subtracting(live)
+            .filter { min($0.w / aspect, $0.h) >= 0.012 }
+            .flatMap { $0.tiled(maxW: maxW, maxH: maxH) }
+            .map { Blob(rect: $0, area: 0) }
     }
 
     private func currentFaces(_ pb: CVPixelBuffer, now: CFTimeInterval) -> [Face] {
