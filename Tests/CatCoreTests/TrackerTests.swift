@@ -60,6 +60,54 @@ final class TrackerTests: XCTestCase {
         XCTAssertEqual(tracks[0].history.map(\.x), [0.11, 0.12])
     }
 
+    private func freezingTracker(idleArea: Int = 0) -> Tracker {
+        Tracker(config: TrackerConfig(iouThreshold: 0.1, maxMissed: 3, historyLength: 0, historyInterval: 1,
+                                      smoothing: 1, freezeWhenIdle: true, idleArea: idleArea))
+    }
+
+    func testIdleFreezesTracksInPlace() {
+        let t = freezingTracker()
+        let first = t.update(blobs: [blob(0.1, 0.1)])
+        var tracks: [Track] = []
+        for _ in 0..<10 {
+            tracks = t.update(blobs: [])
+        }
+        XCTAssertEqual(tracks.map(\.id), first.map(\.id))
+        XCTAssertEqual(tracks[0].alpha, 1)
+        XCTAssertTrue(tracks[0].frozen)
+    }
+
+    func testIdleRestoresFadingTracks() {
+        let t = freezingTracker()
+        _ = t.update(blobs: [blob(0.1, 0.1), blob(0.6, 0.6)])
+        // 右下だけ見失って薄くなり始める
+        let fading = t.update(blobs: [blob(0.1, 0.1)])
+        XCTAssertLessThan(fading.first { $0.rect.x > 0.5 }?.alpha ?? 1, 1)
+        let frozen = t.update(blobs: [])
+        XCTAssertEqual(frozen.count, 2)
+        XCTAssertTrue(frozen.allSatisfy { $0.alpha == 1 })
+    }
+
+    func testResumingDropsUnmatchedFrozenTracksImmediately() {
+        let t = freezingTracker()
+        let first = t.update(blobs: [blob(0.1, 0.1), blob(0.6, 0.6)])
+        _ = t.update(blobs: [])
+        // 左上だけ再び動く。右下の固定ウィンドウは即座に消える
+        let resumed = t.update(blobs: [blob(0.11, 0.1)])
+        XCTAssertEqual(resumed.count, 1)
+        XCTAssertEqual(resumed[0].id, first.first { $0.rect.x < 0.5 }?.id)
+        XCTAssertFalse(resumed[0].frozen)
+    }
+
+    func testTinyMotionCountsAsIdle() {
+        let t = freezingTracker(idleArea: 10)
+        let first = t.update(blobs: [Blob(rect: Rect(x: 0.1, y: 0.1, w: 0.1, h: 0.1), area: 50)])
+        // 面積の合計が idleArea 未満のノイズは「止まっている」とみなし、固定を崩さない
+        let tracks = t.update(blobs: [Blob(rect: Rect(x: 0.7, y: 0.7, w: 0.01, h: 0.01), area: 3)])
+        XCTAssertEqual(tracks.map(\.id), first.map(\.id))
+        XCTAssertTrue(tracks[0].frozen)
+    }
+
     func testSmoothingBlendsTowardNewPosition() {
         let t = Tracker(config: TrackerConfig(iouThreshold: 0.1, maxMissed: 3, historyLength: 0, historyInterval: 1, smoothing: 0.5))
         _ = t.update(blobs: [blob(0.10, 0.1)])

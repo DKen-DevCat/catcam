@@ -8,14 +8,21 @@ public struct TrackerConfig: Sendable {
     public var historyInterval: Int
     /// 新しい位置への追従率（1 で即座に追従）
     public var smoothing: Double
+    /// 動きが止まったら、その時点のトラックをその場に固定する。再び動いたら、対応しない固定トラックは即座に消す
+    public var freezeWhenIdle: Bool
+    /// 塊の面積の合計がこれ未満なら「止まっている」とみなす（ノイズで固定が崩れないように）
+    public var idleArea: Int
 
     public init(iouThreshold: Double = 0.1, maxMissed: Int = 12, historyLength: Int = 4,
-                historyInterval: Int = 3, smoothing: Double = 0.6) {
+                historyInterval: Int = 3, smoothing: Double = 0.6,
+                freezeWhenIdle: Bool = false, idleArea: Int = 0) {
         self.iouThreshold = iouThreshold
         self.maxMissed = maxMissed
         self.historyLength = historyLength
         self.historyInterval = historyInterval
         self.smoothing = smoothing
+        self.freezeWhenIdle = freezeWhenIdle
+        self.idleArea = idleArea
     }
 }
 
@@ -27,6 +34,8 @@ public struct Track: Equatable, Sendable {
     public var age: Int
     public var missed: Int
     public var alpha: Double
+    /// 動きが止まってその場に固定されている
+    public var frozen = false
 }
 
 /// 塊にフレーム間で同じ ID を振る。IoU の大きい組から貪欲に対応付ける
@@ -40,6 +49,16 @@ public final class Tracker {
     }
 
     public func update(blobs: [Blob]) -> [Track] {
+        if config.freezeWhenIdle, blobs.reduce(0, { $0 + $1.area }) < max(config.idleArea, 1) {
+            // 見失いかけのものも含め、直前のウィンドウ群をそのまま残す
+            for i in tracks.indices {
+                tracks[i].frozen = true
+                tracks[i].missed = 0
+                tracks[i].alpha = 1
+            }
+            return tracks
+        }
+
         var pairs: [(t: Int, b: Int, iou: Double)] = []
         for (ti, t) in tracks.enumerated() {
             for (bi, b) in blobs.enumerated() {
@@ -64,6 +83,7 @@ public final class Tracker {
             t.age += 1
             t.missed = 0
             t.alpha = 1
+            t.frozen = false
             tracks[p.t] = t
         }
 
@@ -71,7 +91,7 @@ public final class Tracker {
             tracks[ti].missed += 1
             tracks[ti].alpha = 1 - Double(tracks[ti].missed) / Double(config.maxMissed + 1)
         }
-        tracks.removeAll { $0.missed > config.maxMissed }
+        tracks.removeAll { $0.missed > config.maxMissed || ($0.frozen && $0.missed > 0) }
 
         for (bi, b) in blobs.enumerated() where !blobUsed.contains(bi) {
             tracks.append(Track(id: nextID, rect: b.rect, history: [], age: 1, missed: 0, alpha: 1))

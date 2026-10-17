@@ -160,6 +160,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
             add(t.rect, alpha: t.alpha, kind: 0, minSize: 36)
         }
+        // 顔全体を 1 枚描き、その上に目・鼻・口のウィンドウを重ねる
+        for f in scene.faces {
+            add(f.rect.padded(0.15), alpha: 1, kind: 1, minSize: 80)
+            for p in f.parts {
+                add(p, alpha: 1, kind: 2, minSize: 28)
+            }
+        }
         return out
     }
 

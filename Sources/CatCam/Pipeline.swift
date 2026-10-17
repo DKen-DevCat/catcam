@@ -6,8 +6,10 @@ import QuartzCore
 /// 描画に必要なその時点の状態一式
 struct Scene {
     var pixelBuffer: CVPixelBuffer?
-    /// 動き（顔の動きも含む）のウィンドウ
+    /// 動きのウィンドウ（顔の部分は除く）
     var tracks: [Track] = []
+    /// 顔全体 1 枚と、目・鼻・口のパーツ
+    var faces: [Face] = []
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
     var personMaskVersion = 0
@@ -28,9 +30,9 @@ final class Pipeline {
     private let motion = MotionDetector()
     /// ウィンドウの最大サイズ（映像の高さに対する比率）。queue 上でのみ触る
     private var maxWindow = 0.25
-    private let tracker = Tracker()
-    /// 顔の領域では、この秒数以内に動いた画素を表示し続ける（瞬きや口の動きを残す）
-    private let faceHoldSeconds = 1.0
+    // 動きが止まったらウィンドウをその場に固定し、再び動いたら動いた部分だけに入れ替える
+    private let tracker = Tracker(config: TrackerConfig(freezeWhenIdle: true, idleArea: 30))
+    private let faceSmoother = FaceSmoother(smoothing: 0.5)
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
@@ -70,32 +72,30 @@ final class Pipeline {
         let t0 = CACurrentMediaTime()
         // 高さ基準の比率を幅にも換算し、ほぼ正方形を上限にする
         let aspect = Double(CVPixelBufferGetHeight(pb)) / Double(CVPixelBufferGetWidth(pb))
-        let maxW = maxWindow * aspect, maxH = maxWindow
-        motion.config.maxBlobWidth = maxW
-        motion.config.maxBlobHeight = maxH
+        motion.config.maxBlobWidth = maxWindow * aspect
+        motion.config.maxBlobHeight = maxWindow
         let gray = downsampler.gray(pb)
-        let faceRects = currentFaces(pb, now: t0)
+        let faces = faceSmoother.update(currentFaces(pb, now: t0))
         var person: PersonSegmenter.Result?
         if personEnabled {
             person = segmenter.latest(maxAge: 0.5)
             segmenter.submitIfIdle(pb)
         }
-        // 顔も腕と同じく動いた画素から出す。顔の中だけは小さな動きを一定時間保持する
-        let blobs = motion.process(gray, gate: person?.gate,
-                                   holdRegions: faceRects.map { $0.padded(0.15) },
-                                   holdFrames: Int(faceHoldSeconds * 30))
+        // 顔は専用のウィンドウで出すので、顔の動きは動きのウィンドウにしない
+        let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faces.map { $0.rect.padded(0.15) })
         let tracks = tracker.update(blobs: blobs)
         stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count)
 
         lock.lock()
-        current = Scene(pixelBuffer: pb, tracks: tracks,
+        current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces,
                         personMask: person?.mask, personMaskVersion: person?.version ?? 0)
         lock.unlock()
     }
 
-    private func currentFaces(_ pb: CVPixelBuffer, now: CFTimeInterval) -> [Rect] {
+    private func currentFaces(_ pb: CVPixelBuffer, now: CFTimeInterval) -> [Face] {
         guard faceEnabled else { return [] }
-        let system = now - systemFacesTime <= 0.3 ? systemFaces : []
+        // システムの顔検出は矩形のみでパーツは取れない
+        let system = (now - systemFacesTime <= 0.3 ? systemFaces : []).map { Face(rect: $0, parts: []) }
         if useSystemFaces && !compareFaces { return system }
 
         let vision = faceDetector.latest(maxAge: 0.3)
@@ -105,7 +105,7 @@ final class Pipeline {
             func fmt(_ r: Rect?) -> String {
                 r.map { String(format: "x=%.2f y=%.2f w=%.2f h=%.2f", $0.x, $0.y, $0.w, $0.h) } ?? "-"
             }
-            print("faces system[\(fmt(system.first))] vision[\(fmt(vision.first))]")
+            print("faces system[\(fmt(system.first?.rect))] vision[\(fmt(vision.first?.rect))]")
         }
         return useSystemFaces ? system : vision
     }
