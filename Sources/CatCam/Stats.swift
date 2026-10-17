@@ -15,12 +15,16 @@ final class Stats {
     private var personRuns = 0
     private var blobs = 0
     private var tracks = 0
+    private var areaSum = 0
+    private var frozenFrames = 0
     private var start = CACurrentMediaTime()
     private var cpuStart = Stats.cpuSeconds()
 
-    func recordFrame(ms: Double, blobs: Int, tracks: Int) {
+    func recordFrame(ms: Double, blobs: Int, tracks: Int, area: Int, frozen: Bool) {
         lock.lock()
         camFrames += 1
+        areaSum += area
+        frozenFrames += frozen ? 1 : 0
         frameMsSum += ms
         frameMsMax = max(frameMsMax, ms)
         self.blobs = blobs
@@ -60,7 +64,11 @@ final class Stats {
             faceRuns > 0 ? faceMsSum / Double(faceRuns) : 0, Double(faceRuns) / dt,
             personRuns > 0 ? personMsSum / Double(personRuns) : 0, Double(personRuns) / dt,
             blobs, tracks, (cpu - cpuStart) / dt * 100
-        )
+        ) + String(format: "  area %.0f  frozen %.0f%%",
+                   camFrames > 0 ? Double(areaSum) / Double(camFrames) : 0,
+                   camFrames > 0 ? Double(frozenFrames) / Double(camFrames) * 100 : 0)
+        areaSum = 0
+        frozenFrames = 0
         camFrames = 0
         renderFrames = 0
         frameMsSum = 0

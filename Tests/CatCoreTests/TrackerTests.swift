@@ -108,6 +108,21 @@ final class TrackerTests: XCTestCase {
         XCTAssertTrue(tracks[0].frozen)
     }
 
+    func testFrozenStaysUntilMotionReachesResumeArea() {
+        let t = Tracker(config: TrackerConfig(iouThreshold: 0.1, maxMissed: 3, historyLength: 0, historyInterval: 1,
+                                              smoothing: 1, freezeWhenIdle: true, idleArea: 10, resumeArea: 40))
+        let first = t.update(blobs: [Blob(rect: Rect(x: 0.1, y: 0.1, w: 0.1, h: 0.1), area: 100)])
+        _ = t.update(blobs: [])
+        // 固定中は idleArea 以上でも resumeArea 未満なら動き出しとみなさない
+        let small = t.update(blobs: [Blob(rect: Rect(x: 0.7, y: 0.7, w: 0.05, h: 0.05), area: 20)])
+        XCTAssertEqual(small.map(\.id), first.map(\.id))
+        XCTAssertTrue(small[0].frozen)
+        // resumeArea 以上で動き出し、固定ウィンドウは消える
+        let resumed = t.update(blobs: [Blob(rect: Rect(x: 0.7, y: 0.7, w: 0.1, h: 0.1), area: 50)])
+        XCTAssertEqual(resumed.count, 1)
+        XCTAssertNotEqual(resumed[0].id, first[0].id)
+    }
+
     func testZeroSmoothingKeepsWindowsWhereTheySpawned() {
         // 動きに追従しない: 重なる動きがある間は同じ場所に残り、離れたら新しく湧く
         let t = Tracker(config: TrackerConfig(iouThreshold: 0.3, maxMissed: 3, historyLength: 0, historyInterval: 1, smoothing: 0))

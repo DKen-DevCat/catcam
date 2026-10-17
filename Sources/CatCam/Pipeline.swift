@@ -36,8 +36,9 @@ final class Pipeline {
     private var maxWindow = 0.25
     // ウィンドウは動いた場所に湧くだけで追従しない（smoothing 0）。重なる動きが続く間は残り、離れたら新しく湧く。
     // 動きが止まったらその場に固定し、再び動いたら動いた部分だけに入れ替える
+    // 止まった判定は検出解像度 160×90 の約 1%、動き出しは約 2%（呼吸やノイズで固定が崩れないように）
     private let tracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0,
-                                                        freezeWhenIdle: true, idleArea: 30))
+                                                        freezeWhenIdle: true, idleArea: 150, resumeArea: 300))
     private let faceSmoother = FaceSmoother(smoothing: 0.5)
     // 顔も追従しない。顔が枠から外れるほど動いたら新しい場所に湧き、古い枠は消えていく
     private let faceTracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0))
@@ -98,7 +99,8 @@ final class Pipeline {
         let tracks = tracker.update(blobs: blobs)
         let faceTracks = faceTracker.update(blobs: faces.map { Blob(rect: $0.rect.padded(0.15), area: 0) })
         let faceFillTracks = faceFillTracker.update(blobs: faceFill(faces: faces, windows: faceTracks, aspect: aspect))
-        stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count)
+        stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count,
+                          area: blobs.reduce(0) { $0 + $1.area }, frozen: tracks.contains { $0.frozen })
 
         lock.lock()
         current = Scene(pixelBuffer: pb, tracks: tracks, faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,

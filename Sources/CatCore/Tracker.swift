@@ -12,10 +12,13 @@ public struct TrackerConfig: Sendable {
     public var freezeWhenIdle: Bool
     /// 塊の面積の合計がこれ未満なら「止まっている」とみなす（ノイズで固定が崩れないように）
     public var idleArea: Int
+    /// 固定中は、面積の合計がこれ以上になるまで「動き出した」とみなさない（固定の出入りがばたつかないように）。
+    /// idleArea 以下なら idleArea と同じ扱い
+    public var resumeArea: Int
 
     public init(iouThreshold: Double = 0.1, maxMissed: Int = 12, historyLength: Int = 4,
                 historyInterval: Int = 3, smoothing: Double = 0.6,
-                freezeWhenIdle: Bool = false, idleArea: Int = 0) {
+                freezeWhenIdle: Bool = false, idleArea: Int = 0, resumeArea: Int = 0) {
         self.iouThreshold = iouThreshold
         self.maxMissed = maxMissed
         self.historyLength = historyLength
@@ -23,6 +26,7 @@ public struct TrackerConfig: Sendable {
         self.smoothing = smoothing
         self.freezeWhenIdle = freezeWhenIdle
         self.idleArea = idleArea
+        self.resumeArea = resumeArea
     }
 }
 
@@ -43,13 +47,17 @@ public final class Tracker {
     public var config: TrackerConfig
     public private(set) var tracks: [Track] = []
     private var nextID = 1
+    private var idle = false
 
     public init(config: TrackerConfig = TrackerConfig()) {
         self.config = config
     }
 
     public func update(blobs: [Blob]) -> [Track] {
-        if config.freezeWhenIdle, blobs.reduce(0, { $0 + $1.area }) < max(config.idleArea, 1) {
+        let area = blobs.reduce(0) { $0 + $1.area }
+        let threshold = idle ? max(config.resumeArea, config.idleArea) : config.idleArea
+        idle = config.freezeWhenIdle && area < max(threshold, 1)
+        if idle {
             // 見失いかけのものも含め、直前のウィンドウ群をそのまま残す
             for i in tracks.indices {
                 tracks[i].frozen = true
