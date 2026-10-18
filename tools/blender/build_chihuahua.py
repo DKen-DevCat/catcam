@@ -95,10 +95,16 @@ horn_mat = flat_mat("Horn", PURPLE)
 uv_sphere = lambda location: bpy.ops.mesh.primitive_uv_sphere_add(segments=24, ring_count=12, radius=1, location=location)
 parts = []
 for s in (1, -1):
-    parts.append(add_part(f"Eye.{s}", uv_sphere, (0.36 * s, -0.5, 1.42), (0.19, 0.17, 0.19), eye_mat))
-    parts.append(add_part(f"Highlight.{s}", uv_sphere, (0.31 * s, -0.66, 1.49), (0.045, 0.03, 0.045), hl_mat))
+    # 横長の楕円にして、丸い目の可愛さを抑える
+    parts.append(add_part(f"Eye.{s}", uv_sphere, (0.37 * s, -0.52, 1.42), (0.22, 0.15, 0.125), eye_mat))
+    parts.append(add_part(f"Highlight.{s}", uv_sphere, (0.31 * s, -0.66, 1.46), (0.035, 0.025, 0.028), hl_mat))
 parts.append(add_part("Muzzle", uv_sphere, (0, -0.58, 1.17), (0.27, 0.17, 0.17), white_mat))
 parts.append(add_part("Nose", uv_sphere, (0, -0.74, 1.24), (0.09, 0.06, 0.065), eye_mat))
+# 口はいつも開けておく（黒い口に小さい牙 2 本）
+parts.append(add_part("Mouth", uv_sphere, (0, -0.69, 1.08), (0.14, 0.06, 0.055), eye_mat))
+for s in (1, -1):
+    parts.append(add_part(f"Fang.{s}", lambda location: bpy.ops.mesh.primitive_cone_add(vertices=8, radius1=1, depth=2, location=location),
+                          (0.065 * s, -0.735, 1.1), (0.022, 0.022, 0.032), white_mat, rot=(math.pi, 0, 0)))
 parts.append(add_part("Horn", lambda location: bpy.ops.mesh.primitive_cone_add(vertices=16, radius1=1, depth=2, location=location),
                       (0, 0.05, 2.05), (0.13, 0.13, 0.26), horn_mat, rot=(math.radians(-12), 0, 0)))
 
