@@ -328,6 +328,25 @@ final class AvatarFingerTests: XCTestCase {
         XCTAssertLessThan(simd_length(direction(s, out, "thumb.2.L") - direction(s, out, "thumb.1.L")), 1e-3)
     }
 
+    func testElbowFollowsHandDirection() throws {
+        let s = skeleton()
+        let p = AvatarPoser(skeleton: s, eyeCenter: SIMD3(0, -0.5, 1.4), eyeDistance: 0.7, headScale: 0.7)
+        // 手を真上に向けて、肩の右上に掲げる。前腕は真上を向き、手首は手の位置に来る
+        var hand = [Vec2?](repeating: nil, count: HandJoint.count)
+        hand[HandJoint.wrist] = Vec2(640, 300)
+        hand[HandJoint.middle] = Vec2(640, 260)
+        var body = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: Vec2(640, 300),
+                              rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        body.leftHand = hand
+        let out = try XCTUnwrap(p.pose(face: face(), body: body))
+        XCTAssertLessThan(simd_length(direction(s, out, "forearm.L") - SIMD3(0, 0, 1)), 1e-3)
+        let i = s.index(of: "forearm.L")!
+        let w = s.skinMatrices(local: out.local, stretch: out.stretch)[i] * SIMD4(s.bones[i].tail, 1)
+        let wrist = out.project(SIMD3(w.x, w.y, w.z))
+        XCTAssertEqual(wrist.x, 640, accuracy: 0.5)
+        XCTAssertEqual(wrist.y, 300, accuracy: 0.5)
+    }
+
     func testScaledScalesHandPoints() {
         var b = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: nil, rightShoulder: nil, rightElbow: nil, rightWrist: nil)
         var h = [Vec2?](repeating: nil, count: HandJoint.count)

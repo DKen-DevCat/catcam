@@ -232,7 +232,14 @@ public struct AvatarPoser: Sendable {
                 skeleton.point(&out.local, bone: upper, toward: dir(s, e))
                 skeleton.point(&out.local, bone: fore, toward: wrist.map { dir(e, $0) } ?? dir(s, e))
             } else if let w = wrist {
-                reach(&out, upper: upper, fore: fore, target: out.unproject(SIMD2(Float(w.x), Float(w.y))))
+                let target = out.unproject(SIMD2(Float(w.x), Float(w.y)))
+                if let h = hand, let a = h[HandJoint.wrist], let b = h[HandJoint.middle], (a.x != b.x || a.y != b.y) {
+                    // 肘は取れないので、前腕は手と同じ向きとみなして手首から逆にたどる
+                    let d = simd_normalize(SIMD2(Float(b.x - a.x), Float(-(b.y - a.y))))
+                    reach(&out, upper: upper, fore: fore, target: target, forearmDirection: d)
+                } else {
+                    reach(&out, upper: upper, fore: fore, target: target)
+                }
             } else {
                 skeleton.point(&out.local, bone: upper, toward: SIMD2(0.35 * outward, -1))
                 skeleton.point(&out.local, bone: fore, toward: SIMD2(0.2 * outward, -1))
@@ -261,6 +268,24 @@ public struct AvatarPoser: Sendable {
                 }
             }
         }
+    }
+
+    /// 前腕を `forearmDirection` に向けて先を `target` に置き、上腕は肩からその肘へ向ける。
+    /// 長さが合わない分は骨を伸び縮みさせる（上腕は縮めない。前腕は半分まで縮める）
+    private func reach(_ out: inout AvatarPose, upper: Int, fore: Int, target: SIMD2<Float>, forearmDirection d: SIMD2<Float>) {
+        let b = skeleton.bones
+        let l1 = simd_length(b[upper].tail - b[upper].head), l2 = simd_length(b[fore].tail - b[fore].head)
+        let h = skeleton.posedHeads(local: out.local, stretch: out.stretch)[upper]
+        let s = SIMD2(h.x, h.z)
+        let toElbow = target - d * l2 - s
+        guard simd_length(toElbow) > 1e-4 else { return reach(&out, upper: upper, fore: fore, target: target) }
+        let k1 = max(1, simd_length(toElbow) / l1)
+        let elbow = s + simd_normalize(toElbow) * l1 * k1
+        let toWrist = target - elbow
+        out.stretch[upper] = k1
+        out.stretch[fore] = max(0.5, simd_length(toWrist) / l2)
+        skeleton.point(&out.local, bone: upper, toward: toElbow)
+        skeleton.point(&out.local, bone: fore, toward: simd_length(toWrist) > 1e-4 ? toWrist : d)
     }
 
     /// 上腕と前腕の 2 本で、前腕の先を `target`（モデルの XZ 平面）に届かせる。肘は下向きに曲げる。
