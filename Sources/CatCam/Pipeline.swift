@@ -23,6 +23,8 @@ struct Scene {
     var rigs: [CatFaceRig] = []
     /// 3D アバターの姿勢と置き場所（カメラのピクセル座標）。顔が取れていなければ nil
     var avatar: AvatarPose?
+    /// デバッグ表示: 人の関節（水色）と、対応するアバターの関節（ピンク）
+    var debugJoints: [AvatarDebugJoint] = []
 }
 
 /// カメラフレームごとに 縮小 → 動き検出 → 追跡 を行い、最新の Scene を公開する
@@ -66,6 +68,12 @@ final class Pipeline {
     private typealias HeldHand = (wrist: Vec2, points: [Vec2?]?, time: CFTimeInterval)
     private var lastLeftHand: HeldHand?
     private var lastRightHand: HeldHand?
+    private var lastLeftElbow: (Vec2, CFTimeInterval)?
+    private var lastRightElbow: (Vec2, CFTimeInterval)?
+    /// true なら人とアバターの関節を Scene に入れ、毎秒ログに出す
+    var debugJoints = false
+    private var lastDebugLog: CFTimeInterval = 0
+    private var debug: [AvatarDebugJoint] = []
     private lazy var faceDetector: FaceDetector = {
         let d = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
         d.onJoints = { [stats] s in stats.recordJoints(s) }
@@ -153,7 +161,8 @@ final class Pipeline {
         lock.lock()
         current = Scene(pixelBuffer: pb, tracks: tracks, cats: catsEnabled ? cats : [:], faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,
                         personMask: person?.mask, personMaskVersion: person?.version ?? 0, rigs: rigs,
-                        avatar: avatarPose.map { idle?.apply($0, time: t0) ?? $0 })
+                        avatar: avatarPose.map { idle?.apply($0, time: t0) ?? $0 },
+                        debugJoints: debugJoints && avatarPose != nil ? debug : [])
         lock.unlock()
     }
 
@@ -165,19 +174,38 @@ final class Pipeline {
         if let target = poser.pose(face: rigs.first, body: hands) {
             avatarPose = target.blended(from: avatarPose, t: 0.5)
             avatarSeen = now
+            if debugJoints, let shown = avatarPose {
+                debug = poser.debugJoints(pose: shown, face: rigs.first, body: hands)
+                logDebug(now: now)
+            }
         } else if now - avatarSeen > 0.5 {
             avatarPose = nil
         }
+    }
+
+    /// 例: "joints 左手首 H(612,388) A(615,390) Δ3 | 左肘 H-- A(560,470) | ..."
+    private func logDebug(now: CFTimeInterval) {
+        guard now - lastDebugLog >= 1 else { return }
+        lastDebugLog = now
+        func f(_ p: SIMD2<Float>?) -> String { p.map { String(format: "(%.0f,%.0f)", $0.x, $0.y) } ?? "--" }
+        let parts = debug.map { j in
+            let h = f(j.human.map { SIMD2(Float($0.x), Float($0.y)) })
+            return "\(j.name) H\(h) A\(f(j.avatar))" + (j.error.map { String(format: " Δ%.0f", $0) } ?? "")
+        }
+        print("joints " + parts.joined(separator: " | "))
     }
 
     /// 手を一瞬見失っても前足が落ちないよう、左右それぞれ 0.4 秒は最後の位置を使う
     private func holdHands(_ j: BodyJoints?, now: CFTimeInterval) -> BodyJoints {
         if let l = j?.leftWrist { lastLeftHand = (l, j?.leftHand, now) }
         if let r = j?.rightWrist { lastRightHand = (r, j?.rightHand, now) }
+        if let e = j?.leftElbow { lastLeftElbow = (e, now) }
+        if let e = j?.rightElbow { lastRightElbow = (e, now) }
         func held(_ h: HeldHand?) -> HeldHand? { h.flatMap { now - $0.time <= 0.4 ? $0 : nil } }
+        func held(_ e: (Vec2, CFTimeInterval)?) -> Vec2? { e.flatMap { now - $0.1 <= 0.4 ? $0.0 : nil } }
         let l = held(lastLeftHand), r = held(lastRightHand)
-        var out = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: l?.wrist,
-                             rightShoulder: nil, rightElbow: nil, rightWrist: r?.wrist)
+        var out = BodyJoints(leftShoulder: j?.leftShoulder, leftElbow: held(lastLeftElbow), leftWrist: l?.wrist,
+                             rightShoulder: j?.rightShoulder, rightElbow: held(lastRightElbow), rightWrist: r?.wrist)
         out.leftHand = l?.points
         out.rightHand = r?.points
         return out

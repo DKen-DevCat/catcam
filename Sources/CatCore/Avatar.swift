@@ -228,9 +228,11 @@ public struct AvatarPoser: Sendable {
             guard let upper = skeleton.index(of: "upper_arm.\(side)"), let fore = skeleton.index(of: "forearm.\(side)") else { continue }
             let outward: Float = side == "L" ? 1 : -1
             func dir(_ a: Vec2, _ b: Vec2) -> SIMD2<Float> { SIMD2(Float(b.x - a.x), Float(-(b.y - a.y))) }
-            if let s = shoulder, let e = elbow {
-                skeleton.point(&out.local, bone: upper, toward: dir(s, e))
-                skeleton.point(&out.local, bone: fore, toward: wrist.map { dir(e, $0) } ?? dir(s, e))
+            _ = shoulder
+            if let e = elbow {
+                // 肘が取れていれば、肘と手首を人の位置にそのまま重ねる（肩はモデルの肩のまま）
+                place(&out, upper: upper, fore: fore, elbow: out.unproject(SIMD2(Float(e.x), Float(e.y))),
+                      wrist: wrist.map { out.unproject(SIMD2(Float($0.x), Float($0.y))) })
             } else if let w = wrist {
                 let target = out.unproject(SIMD2(Float(w.x), Float(w.y)))
                 if let h = hand, let a = h[HandJoint.wrist], let b = h[HandJoint.middle], (a.x != b.x || a.y != b.y) {
@@ -268,6 +270,52 @@ public struct AvatarPoser: Sendable {
                 }
             }
         }
+    }
+
+    /// 上腕の先を `elbow` に、前腕の先を `wrist` に置く（骨を 0.2 倍まで伸び縮みさせて長さを合わせる）。手首がなければ前腕はまっすぐ
+    private func place(_ out: inout AvatarPose, upper: Int, fore: Int, elbow: SIMD2<Float>, wrist: SIMD2<Float>?) {
+        let b = skeleton.bones
+        let l1 = simd_length(b[upper].tail - b[upper].head), l2 = simd_length(b[fore].tail - b[fore].head)
+        let h = skeleton.posedHeads(local: out.local, stretch: out.stretch)[upper]
+        let toElbow = elbow - SIMD2(h.x, h.z)
+        guard simd_length(toElbow) > 1e-4 else { return }
+        out.stretch[upper] = max(0.2, simd_length(toElbow) / l1)
+        skeleton.point(&out.local, bone: upper, toward: toElbow)
+        if let wrist, simd_length(wrist - elbow) > 1e-4 {
+            out.stretch[fore] = max(0.2, simd_length(wrist - elbow) / l2)
+            skeleton.point(&out.local, bone: fore, toward: wrist - elbow)
+        } else {
+            out.stretch[fore] = 1
+            skeleton.point(&out.local, bone: fore, toward: toElbow)
+        }
+    }
+
+    /// 人の関節と、それに対応するアバターの関節の画像上の位置（デバッグ表示・ログ用）。
+    /// アバターの位置は骨の根元・先から求める。人の側が取れていなければ nil
+    public func debugJoints(pose: AvatarPose, face: CatFaceRig?, body: BodyJoints?) -> [AvatarDebugJoint] {
+        let m = skeleton.skinMatrices(local: pose.local, stretch: pose.stretch)
+        func at(_ name: String, tail: Bool) -> SIMD2<Float>? {
+            guard let i = skeleton.index(of: name) else { return nil }
+            let p = m[i] * SIMD4(tail ? skeleton.bones[i].tail : skeleton.bones[i].head, 1)
+            return pose.project(SIMD3(p.x, p.y, p.z))
+        }
+        var out: [AvatarDebugJoint] = []
+        if let face {
+            let mid = (face.leftEye.center + face.rightEye.center) * 0.5
+            let headIndex = skeleton.index(of: "Head")
+            let eye = headIndex.map { m[$0] * SIMD4(eyeCenter, 1) }
+            out.append(AvatarDebugJoint(name: "目", human: mid, avatar: eye.map { pose.project(SIMD3($0.x, $0.y, $0.z)) }))
+        }
+        for (side, label, elbow, wrist, hand) in [("L", "左", body?.leftElbow, body?.leftWrist, body?.leftHand),
+                                                  ("R", "右", body?.rightElbow, body?.rightWrist, body?.rightHand)] {
+            out.append(AvatarDebugJoint(name: "\(label)肘", human: elbow, avatar: at("upper_arm.\(side)", tail: true)))
+            out.append(AvatarDebugJoint(name: "\(label)手首", human: wrist, avatar: at("forearm.\(side)", tail: true)))
+            for (finger, jp) in [("thumb", "親指先"), ("index", "人差指先"), ("middle", "中指先"), ("little", "小指先")] {
+                let start = HandJoint.fingers.first { $0.name == finger }!.start
+                out.append(AvatarDebugJoint(name: "\(label)\(jp)", human: hand?[start + 3], avatar: at("\(finger).3.\(side)", tail: true)))
+            }
+        }
+        return out
     }
 
     /// 前腕を `forearmDirection` に向けて先を `target` に置き、上腕は肩からその肘へ向ける。
@@ -337,5 +385,18 @@ public struct AvatarIdle: Sendable {
         // 呼吸: 約 4 秒周期で、大きさの 1.5% だけ上下する
         p.origin.y += Float(sin(time * 1.6)) * pose.scale * 0.015
         return p
+    }
+}
+
+/// デバッグ用: 人の関節と、対応するアバターの関節（画像のピクセル座標）
+public struct AvatarDebugJoint: Sendable {
+    public var name: String
+    public var human: Vec2?
+    public var avatar: SIMD2<Float>?
+
+    /// 両方あるときのずれ（px）
+    public var error: Float? {
+        guard let human, let avatar else { return nil }
+        return simd_length(avatar - SIMD2(Float(human.x), Float(human.y)))
     }
 }

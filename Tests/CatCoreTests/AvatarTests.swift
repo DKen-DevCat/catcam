@@ -129,7 +129,12 @@ final class AvatarTests: XCTestCase {
             let h = m[p.skeleton.index(of: name)!] * SIMD4(b.head, 1), t = m[p.skeleton.index(of: name)!] * SIMD4(b.tail, 1)
             return simd_normalize(SIMD3(t.x - h.x, t.y - h.y, t.z - h.z))
         }
-        assertNear(dir("upper_arm.L"), SIMD3(0, 0, -1))
+        // 肘と手首は人の位置にそのまま重なる
+        let joints = p.debugJoints(pose: out, face: face(), body: body)
+        for name in ["左肘", "左手首"] {
+            let j = try XCTUnwrap(joints.first { $0.name == name })
+            XCTAssertLessThan(try XCTUnwrap(j.error), 0.5, name)
+        }
         assertNear(dir("forearm.L"), SIMD3(1, 0, 0))
         // 取れていない腕は下ろした姿勢にする
         XCTAssertLessThan(dir("upper_arm.R").z, -0.5)

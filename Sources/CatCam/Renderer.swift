@@ -148,6 +148,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
+    private let dotPipeline: MTLRenderPipelineState
     private let textureCache: CVMetalTextureCache
     private let source: Pipeline
     // 人物マスクは小さい（数百 KB）ので、更新された時だけ CPU からテクスチャに書き込む
@@ -177,6 +178,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         color.destinationRGBBlendFactor = .oneMinusSourceAlpha
         color.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         pipelineState = try device.makeRenderPipelineState(descriptor: desc)
+        desc.vertexFunction = library.makeFunction(name: "dot_vertex")
+        desc.fragmentFunction = library.makeFunction(name: "dot_fragment")
+        dotPipeline = try device.makeRenderPipelineState(descriptor: desc)
 
         var cache: CVMetalTextureCache?
         CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
@@ -234,6 +238,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     encoder.setFragmentTexture(avatarTexture ?? texture, index: 3)
                     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: instances.count)
                 }
+                drawDebugJoints(scene.debugJoints, encoder: encoder, uniforms: u)
             }
         }
         encoder.endEncoding()
@@ -326,6 +331,32 @@ final class Renderer: NSObject, MTKViewDelegate {
             return SIMD4(0, Float(1 - h), 1, Float(h))  // 縦に余る時は下に寄せる（床に立つ見た目）
         }
         return SIMD4(0, 0, 1, 1)
+    }
+
+    /// 人の関節を水色の輪、アバターの関節をピンクの点で描く。輪の中に点が入っていれば動きがリンクしている
+    private func drawDebugJoints(_ joints: [AvatarDebugJoint], encoder: MTLRenderCommandEncoder, uniforms u: Uniforms) {
+        var dots: [SIMD4<Float>] = []  // 画面 x, y, 半径, 種類（0 人 / 1 アバター）
+        func screen(_ p: SIMD2<Float>) -> SIMD2<Float> {
+            var uv = p / u.camSize
+            if mirror { uv.x = 1 - uv.x }
+            return (uv - u.camB) / u.camK * u.viewport
+        }
+        for j in joints {
+            if let h = j.human {
+                let s = screen(SIMD2(Float(h.x), Float(h.y)))
+                dots.append(SIMD4(s.x, s.y, 9 * u.scale, 0))
+            }
+            if let a = j.avatar {
+                let s = screen(a)
+                dots.append(SIMD4(s.x, s.y, 5 * u.scale, 1))
+            }
+        }
+        guard !dots.isEmpty, let buffer = device.makeBuffer(bytes: dots, length: MemoryLayout<SIMD4<Float>>.stride * dots.count) else { return }
+        var viewport = u.viewport
+        encoder.setRenderPipelineState(dotPipeline)
+        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+        encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: dots.count)
     }
 
     private func screenFrame(_ r: Rect, _ u: Uniforms, minSize: Float) -> SIMD4<Float> {
@@ -505,6 +536,38 @@ final class Renderer: NSObject, MTKViewDelegate {
                 alpha = max(alpha, w);
             }
         }
+    }
+
+    // ---- デバッグ用の関節の点 ----
+    struct DotOut { float4 position [[position]]; float2 local; float kind [[flat]]; float radius [[flat]]; };
+
+    vertex DotOut dot_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                             constant float4 *dots [[buffer(0)]], constant float2 &viewport [[buffer(1)]]) {
+        const float2 corners[6] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,-1), float2(1,1), float2(-1,1) };
+        float4 d = dots[iid];
+        float2 p = d.xy + corners[vid] * (d.z + 2);
+        DotOut o;
+        o.position = float4(p.x / viewport.x * 2 - 1, 1 - p.y / viewport.y * 2, 0, 1);
+        o.local = corners[vid] * (d.z + 2);
+        o.kind = d.w;
+        o.radius = d.z;
+        return o;
+    }
+
+    fragment float4 dot_fragment(DotOut in [[stage_in]]) {
+        float r = length(in.local);
+        float a;
+        float3 c;
+        if (in.kind < 0.5) {
+            // 人: 水色の輪
+            a = 1 - smoothstep(1.5, 2.5, abs(r - in.radius + 2));
+            c = float3(0.2, 0.9, 1.0);
+        } else {
+            // アバター: ピンクの塗りつぶし
+            a = 1 - smoothstep(in.radius - 1, in.radius, r);
+            c = float3(1.0, 0.25, 0.7);
+        }
+        return float4(c * a, a);
     }
 
     vertex VOut window_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],

@@ -20,6 +20,8 @@ final class FaceDetector {
         return r
     }()
     var handsEnabled = false
+    // 肘と肩は体全体の関節検出から取る。カメラに近いと取れないことが多いが、取れた時は推定より優先する
+    private let bodyRequest = VNDetectHumanBodyPoseRequest()
     private let sequenceHandler = VNSequenceRequestHandler()
     private let scaler: GPUScaler?
     private let lock = NSLock()
@@ -53,10 +55,13 @@ final class FaceDetector {
             let t0 = CACurrentMediaTime()
             let input = scaler?.scale(pb) ?? pb
             let withHands = handsEnabled
-            try? sequenceHandler.perform(withHands ? [request, handRequest] : [request], on: input, orientation: .up)
+            try? sequenceHandler.perform(withHands ? [request, handRequest, bodyRequest] : [request], on: input, orientation: .up)
             let found = (request.results ?? []).map(Self.face)
-            let joints = withHands ? Self.hands(handRequest.results ?? [], faceX: found.first.map { $0.rect.x + $0.rect.w / 2 }) : nil
-            if withHands { onJoints?(Self.summary(handRequest.results ?? [])) }
+            var joints = withHands ? Self.hands(handRequest.results ?? [], faceX: found.first.map { $0.rect.x + $0.rect.w / 2 }) : nil
+            if withHands, let body = bodyRequest.results?.first {
+                Self.merge(body, into: &joints)
+            }
+            if withHands { onJoints?(Self.summary(handRequest.results ?? []) + " " + Self.summary(bodyRequest.results?.first)) }
             let t1 = CACurrentMediaTime()
             lock.lock()
             faces = found
@@ -80,6 +85,32 @@ final class FaceDetector {
         lock.lock()
         defer { lock.unlock() }
         return CACurrentMediaTime() - resultTime <= maxAge ? hands : nil
+    }
+
+    /// 体全体の関節から肩と肘を足す。手首は手の検出で取れなかった時だけ使う
+    private static func merge(_ o: VNHumanBodyPoseObservation, into j: inout BodyJoints?) {
+        func p(_ name: VNHumanBodyPoseObservation.JointName) -> Vec2? {
+            guard let r = try? o.recognizedPoint(name), r.confidence > 0.2 else { return nil }
+            return Vec2(Double(r.location.x), Double(1 - r.location.y))
+        }
+        var b = j ?? BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: nil, rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        b.leftShoulder = p(.leftShoulder)
+        b.rightShoulder = p(.rightShoulder)
+        b.leftElbow = p(.leftElbow)
+        b.rightElbow = p(.rightElbow)
+        b.leftWrist = b.leftWrist ?? p(.leftWrist)
+        b.rightWrist = b.rightWrist ?? p(.rightWrist)
+        j = b
+    }
+
+    /// 例: "体 肘L0.42 肘R--"
+    private static func summary(_ o: VNHumanBodyPoseObservation?) -> String {
+        guard let o else { return "体0" }
+        func c(_ n: VNHumanBodyPoseObservation.JointName) -> String {
+            guard let r = try? o.recognizedPoint(n), r.confidence > 0 else { return "--" }
+            return String(format: "%.2f", r.confidence)
+        }
+        return "体 肘L\(c(.leftElbow)) 肘R\(c(.rightElbow))"
     }
 
     /// `HandJoint` の並び
