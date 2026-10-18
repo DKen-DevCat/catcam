@@ -30,7 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let overlay = try OverlayWindow(screen: screen, device: device, source: pipeline, mirror: options.mirror)
             overlay.orderFrontRegardless()
             overlay.renderer.backgroundMode = options.noPerson ? .original : .glass
-            overlay.renderer.catStyle = CatStyle.presets[0]
+            do {
+                let model = try AvatarModel(directory: AvatarModel.defaultDirectory, device: device)
+                overlay.renderer.avatar = try AvatarRenderer(model: model, device: device)
+                overlay.renderer.avatarOn = true
+                pipeline.setAvatarPoser(model.makePoser())
+                print("avatar: \(model.skeleton.bones.count) bones")
+            } catch {
+                print("avatar: unavailable (\(error.localizedDescription)). tools/blender の手順で models/out/ を作るとアバターが出る")
+                overlay.renderer.catStyle = CatStyle.presets[0]
+            }
             overlay.renderer.fullFrame = options.fullFrame
             // 人物を猫フィルタで描くので、人物マスクは背景モードによらず要る
             pipeline.personEnabled = true

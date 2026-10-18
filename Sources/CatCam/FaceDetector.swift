@@ -13,12 +13,16 @@ final class FaceDetector {
     private let queue = DispatchQueue(label: "catcam.face", qos: .userInitiated)
     // 毎回作るとリビジョン解決などの初期化コストが乗るので使い回す（queue 上でのみ触る）
     private let request = VNDetectFaceLandmarksRequest()
+    // アバターの腕を動かすための体の関節。顔と同じ縮小画像で一緒に回す
+    private let bodyRequest = VNDetectHumanBodyPoseRequest()
+    var bodyEnabled = false
     private let sequenceHandler = VNSequenceRequestHandler()
     private let scaler: GPUScaler?
     private let lock = NSLock()
     private var busy = false
     private var lastSubmit: CFTimeInterval = 0
     private var faces: [Face] = []
+    private var body: BodyJoints?
     private var resultTime: CFTimeInterval = 0
     private let onDuration: (Double) -> Void
 
@@ -41,11 +45,14 @@ final class FaceDetector {
         queue.async { [self] in
             let t0 = CACurrentMediaTime()
             let input = scaler?.scale(pb) ?? pb
-            try? sequenceHandler.perform([request], on: input, orientation: .up)
+            let withBody = bodyEnabled
+            try? sequenceHandler.perform(withBody ? [request, bodyRequest] : [request], on: input, orientation: .up)
             let found = (request.results ?? []).map(Self.face)
+            let joints = withBody ? Self.body(bodyRequest.results?.first) : nil
             let t1 = CACurrentMediaTime()
             lock.lock()
             faces = found
+            body = joints
             resultTime = t1
             busy = false
             lock.unlock()
@@ -58,6 +65,24 @@ final class FaceDetector {
         lock.lock()
         defer { lock.unlock() }
         return CACurrentMediaTime() - resultTime <= maxAge ? faces : []
+    }
+
+    /// `maxAge` 秒より古い結果は捨てる
+    func latestBody(maxAge: CFTimeInterval) -> BodyJoints? {
+        lock.lock()
+        defer { lock.unlock() }
+        return CACurrentMediaTime() - resultTime <= maxAge ? body : nil
+    }
+
+    /// 関節は本人から見た左右。信頼度の低い関節は nil にする（正規化座標・左上原点）
+    private static func body(_ o: VNHumanBodyPoseObservation?) -> BodyJoints? {
+        guard let o else { return nil }
+        func p(_ name: VNHumanBodyPoseObservation.JointName) -> Vec2? {
+            guard let r = try? o.recognizedPoint(name), r.confidence > 0.3 else { return nil }
+            return Vec2(Double(r.location.x), Double(1 - r.location.y))
+        }
+        return BodyJoints(leftShoulder: p(.leftShoulder), leftElbow: p(.leftElbow), leftWrist: p(.leftWrist),
+                          rightShoulder: p(.rightShoulder), rightElbow: p(.rightElbow), rightWrist: p(.rightWrist))
     }
 
     /// Vision は左下原点で、ランドマークは顔の枠に対する相対座標。左上原点の画像座標に直す

@@ -24,8 +24,9 @@ final class ControlPanel: NSPanel {
         let maxWindow = NSSlider(value: 0.25, minValue: 0.08, maxValue: 0.8, target: self, action: #selector(maxWindowChanged(_:)))
         let display = NSPopUpButton(frame: .zero, pullsDown: false)
         display.addItems(withTitles: DisplayMode.allCases.map(\.label))
-        display.selectItem(at: (renderer.catStyle != nil ? DisplayMode.filter : .human).rawValue)
+        display.selectItem(at: (renderer.avatarOn ? DisplayMode.avatar : renderer.catStyle != nil ? .filter : .human).rawValue)
         display.item(at: DisplayMode.photo.rawValue)?.isEnabled = renderer.cats != nil
+        display.item(at: DisplayMode.avatar.rawValue)?.isEnabled = renderer.avatar != nil
         display.autoenablesItems = false
         display.target = self
         display.action = #selector(displayChanged(_:))
@@ -93,6 +94,8 @@ final class ControlPanel: NSPanel {
         guard let mode = DisplayMode(rawValue: p.indexOfSelectedItem) else { return }
         let styleIndex = styleButton?.indexOfSelectedItem ?? 0
         renderer.catStyle = mode == .filter ? CatStyle.presets[max(styleIndex, 0)] : nil
+        renderer.avatarOn = mode == .avatar
+        pipeline.setAvatarPoser(mode == .avatar ? renderer.avatar?.model.makePoser() : nil)
         pipeline.setCatsEnabled(mode == .photo)
         updatePersonEnabled()
     }
@@ -128,10 +131,11 @@ final class ControlPanel: NSPanel {
 
 /// 人物の部分に何を出すか
 enum DisplayMode: Int, CaseIterable {
-    case filter, photo, human
+    case avatar, filter, photo, human
 
     var label: String {
         switch self {
+        case .avatar: "毒チワワ（3D アバター）"
         case .filter: "猫フィルタ（人を猫にする）"
         case .photo: "形の似た猫の写真（M3）"
         case .human: "人のまま"

@@ -31,7 +31,8 @@ private struct Uniforms {
     /// 1 なら人物を猫フィルタ（毛並み・猫の顔）で描く
     var filterOn: Float = 0
     var rigCount: Float = 0
-    var pad1: Float = 0
+    /// 1 なら人物の代わりに 3D アバターを出す
+    var avatarOn: Float = 0
     /// カメラ映像のピクセル数（毛並みと猫の顔はカメラのピクセル座標で描く）
     var camSize: SIMD2<Float> = .zero
     var pad2: SIMD2<Float> = .zero
@@ -141,6 +142,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var catStyle: CatStyle?
     /// 窓を出さず、映像全体を 1 枚で出す（猫フィルタの見た目確認用）
     var fullFrame = false
+    /// 人物の代わりに描く 3D アバター。nil なら使わない
+    var avatar: AvatarRenderer?
+    var avatarOn = false
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
@@ -187,10 +191,16 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func draw(in view: MTKView) {
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
-              let cmd = commandQueue.makeCommandBuffer(),
-              let encoder = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
+              let cmd = commandQueue.makeCommandBuffer() else { return }
 
         let scene = source.scene
+        // アバターは窓より先に、カメラと同じ大きさのテクスチャへ描いておく
+        var avatarTexture: MTLTexture?
+        if avatarOn, let avatar, let pb = scene.pixelBuffer {
+            avatarTexture = avatar.encode(cmd, pose: scene.avatar,
+                                          width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
+        }
+        guard let encoder = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         var cvTexture: CVMetalTexture?
         if let pb = scene.pixelBuffer {
             let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
@@ -201,6 +211,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 let mask = updateMask(scene)
                 u.hasMask = mask == nil || !(backgroundMode.needsPersonMask || catStyle != nil) ? 0 : 1
                 u.bgMode = Float(backgroundMode.rawValue)
+                u.avatarOn = avatarTexture == nil ? 0 : 1
                 if let catStyle {
                     u.filterOn = 1
                     u.style = catStyle.gpu
@@ -220,6 +231,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     encoder.setFragmentTexture(texture, index: 0)
                     encoder.setFragmentTexture(mask ?? texture, index: 1)
                     encoder.setFragmentTexture(cats?.texture ?? texture, index: 2)
+                    encoder.setFragmentTexture(avatarTexture ?? texture, index: 3)
                     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: instances.count)
                 }
             }
@@ -336,7 +348,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     struct Uniforms {
         float2 viewport; float2 camK; float2 camB;
         float titleH; float radius; float shadow; float mirror; float scale; float hasMask;
-        float bgMode; float filterOn; float rigCount; float pad1;
+        float bgMode; float filterOn; float rigCount; float avatarOn;
         float2 camSize; float2 pad2;
         Style style;
     };
@@ -513,7 +525,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     fragment float4 window_fragment(VOut in [[stage_in]], constant Instance *inst [[buffer(0)]],
                                     constant Uniforms &u [[buffer(1)]], texture2d<float> cam [[texture(0)]],
                                     texture2d<float> personMask [[texture(1)]], texture2d<float> catAtlas [[texture(2)]],
-                                    constant Rig *rigs [[buffer(2)]]) {
+                                    constant Rig *rigs [[buffer(2)]], texture2d<float> avatarTex [[texture(3)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         Instance i = inst[in.inst];
         float alpha = i.params.x;
@@ -557,10 +569,21 @@ final class Renderer: NSObject, MTKViewDelegate {
                 person = furColor(px, l / 8.0, u.style);
             }
             col = camCol;
-            if (u.hasMask > 0.5) {
+            float m = 1;
+            bool masked = false;
+            if (u.avatarOn > 0.5) {
+                // 3D アバター: 人物の代わりにアバターを出す。人物の切り抜きは使わない
+                float4 av = avatarTex.sample(s, uv);
+                person = av.rgb;
+                m = av.a;
+                masked = true;
+            } else if (u.hasMask > 0.5) {
                 // 猫に差し替えるウィンドウでは人物を消し、背景だけにする
                 float2 muv = filt ? uv + furFuzz(px) / u.camSize : uv;
-                float m = hasCat ? 0.0 : smoothstep(0.3, 0.7, personMask.sample(s, muv).r);
+                m = hasCat ? 0.0 : smoothstep(0.3, 0.7, personMask.sample(s, muv).r);
+                masked = true;
+            }
+            if (masked) {
                 int mode = int(u.bgMode + 0.5);
                 if (mode == 0) {
                     // 透明: 人物だけ
@@ -571,7 +594,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     col = mix(float3(0.08, 0.08, 0.09), person, m);
                     contentAlpha = mix(0.22, 1.0, m);
                 } else if (mode == 3) {
-                    // そのまま: 背景はカメラ映像（猫フィルタの時だけここに来る）
+                    // そのまま: 背景はカメラ映像（猫フィルタ・アバターの時だけここに来る）
                     col = mix(camCol, person, m);
                 } else {
                     // ぼかし: 周囲 12 点の平均（2 重の輪）

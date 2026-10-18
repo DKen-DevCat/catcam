@@ -139,6 +139,8 @@ def add_mouth():
     o.data.materials.append(eye_mat)
     vg = o.vertex_groups.new(name="Head")
     vg.add(list(range(len(o.data.vertices))), 1.0, "REPLACE")
+    # アプリ側で口の開閉に合わせて伸縮させるための目印（対応する骨はないので変形には影響しない）
+    o.vertex_groups.new(name="Mouth").add(list(range(len(o.data.vertices))), 1.0, "REPLACE")
     return o
 
 
