@@ -13,6 +13,8 @@ GREEN = (0.05, 0.36, 0.08)
 GREEN_RIM = (0.01, 0.10, 0.02)
 WHITE = (0.86, 0.85, 0.88)
 EAR_INNER = (0.86, 0.70, 0.78)
+LILAC = (0.55, 0.36, 0.72)
+DARK_PURPLE = (0.12, 0.02, 0.18)
 BLACK = (0.01, 0.01, 0.012)
 
 cat = bpy.data.objects["Cat"]
@@ -100,8 +102,8 @@ for s in (1, -1):
     parts.append(add_part(f"Highlight.{s}", uv_sphere, (0.31 * s, -0.66, 1.46), (0.035, 0.025, 0.028), hl_mat))
 MUZ_C, MUZ_R = Vector((0, -0.57, 1.14)), Vector((0.33, 0.2, 0.21))
 parts.append(add_part("Muzzle", uv_sphere, tuple(MUZ_C), tuple(MUZ_R), white_mat))
-parts.append(add_part("Nose", uv_sphere, (0, -0.76, 1.25), (0.11, 0.06, 0.05), eye_mat))
-# 口はいつも開けておく。参考画像の、鼻先いっぱいに広がる黒い三日月形の笑い口
+parts.append(add_part("Nose", uv_sphere, (0, -0.77, 1.25), (0.13, 0.07, 0.075), eye_mat))
+# 口はいつも少し開けておく。鼻の下の小さい笑い口
 
 
 def on_muzzle(x, z, lift):
@@ -112,14 +114,14 @@ def on_muzzle(x, z, lift):
 
 
 def add_mouth():
-    w, n = 0.29, 28
+    w, n = 0.15, 20
     top, bottom = [], []
     for i in range(n + 1):
         u = -w + 2 * w * i / n
         t = (u / w) ** 2
         # 上の縁は中央だけ白い上唇が垂れ下がる。両端で上下の縁が近づいて細くなる
-        up = 1.12 + 0.06 * t - 0.035 * math.exp(-(u / 0.055) ** 2)
-        lo = 1.0 + 0.15 * t
+        up = 1.1 + 0.04 * t - 0.015 * math.exp(-(u / 0.04) ** 2)
+        lo = 1.06 + 0.07 * t
         top.append(on_muzzle(u, up, 0.012))
         bottom.append(on_muzzle(u, min(lo, up - 0.012), 0.012))
     verts = top + bottom
@@ -144,11 +146,24 @@ parts.append(add_mouth())
 parts.append(add_part("Horn", lambda location: bpy.ops.mesh.primitive_cone_add(vertices=16, radius1=1, depth=2, location=location),
                       (0, 0.05, 2.05), (0.13, 0.13, 0.26), horn_mat, rot=(math.radians(-12), 0, 0)))
 
-# ---- 体の色: 紫に緑の斑点、白い靴下・鼻先、灰色の耳の内側、白い眉 ----
-# 斑点は頭の上だけ（参考画像に合わせる）
-spots = [(Vector((0, -0.3, 1.8)), 0.12)]
-spots += [(Vector((0.36 * s, -0.12, 1.8)), 0.11) for s in (1, -1)]
-spots += [(Vector((0.66 * s, 0.05, 1.62)), 0.09) for s in (1, -1)]
+# ---- 体の色（参考: ゲーム画面の毒チワワ） ----
+# 額の左右に、明るい紫のふちが付いた大きい緑の斑点。角の付け根のまわりに、ふちなしの小さい斑点
+# 細かい模様は輪郭をなめらかにしたいので、頂点色ではなく焼き込み時のシェーダで描く（下の paint_details）
+spots = [(Vector((0.5 * s, -0.3, 1.74)), 0.12, LILAC) for s in (1, -1)]
+spots += [(Vector((0, -0.3, 1.81)), 0.07, None)]
+spots += [(Vector((0.2 * s, -0.12, 1.86)), 0.06, None) for s in (1, -1)]
+# 目の上（少し内側）のぼんやりした白い丸
+brows = [(Vector((0.24 * s, -0.5, 1.6)), 0.075) for s in (1, -1)]
+eyes = [Vector((0.37 * s, -0.52, 1.42)) for s in (1, -1)]
+
+
+def mix(a, b, t):
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+def smooth(e0, e1, x):
+    t = min(max((x - e0) / (e1 - e0), 0.0), 1.0)
+    return t * t * (3 - 2 * t)
 
 
 def body_color(p, n):
@@ -158,18 +173,12 @@ def body_color(p, n):
     # 耳の内側は白っぽいピンク
     if abs(p.x) > 0.78 and p.z > 1.45 and n.y < -0.2:
         return EAR_INNER
-    # 顔の下半分（目より下）は白
-    if p.y < -0.3 and 0.9 < p.z < 1.36 and abs(p.x) < 0.62:
+    # 鼻先のまわりから喉までは白（頬は紫のまま）
+    if p.y < -0.3 and 0.9 < p.z < 1.32 and abs(p.x) < 0.4:
         return WHITE
     # 胸からお腹の前側は白
     if -0.45 <= p.z < 0.98 and n.y < -0.35 and abs(p.x) < 0.62:
         return WHITE
-    for c, r in spots:
-        d = (p - c).length
-        if d < r:
-            return GREEN
-        if d < r * 1.3:
-            return GREEN_RIM
     return PURPLE
 
 
@@ -195,7 +204,7 @@ bpy.ops.mesh.select_all(action="SELECT")
 bpy.ops.uv.smart_project(angle_limit=math.radians(60), island_margin=0.01)
 bpy.ops.object.mode_set(mode="OBJECT")
 
-img = bpy.data.images.new("DokuChihuahua", 1024, 1024)
+img = bpy.data.images.new("DokuChihuahua", 2048, 2048)
 body = bpy.data.materials.new("Body")
 body.use_nodes = True
 nt = body.node_tree
@@ -203,7 +212,61 @@ bsdf = nt.nodes.get("Principled BSDF")
 bsdf.inputs["Roughness"].default_value = 0.7
 attr = nt.nodes.new("ShaderNodeVertexColor")
 attr.layer_name = "Col"
-nt.links.new(attr.outputs["Color"], bsdf.inputs["Base Color"])
+coord = nt.nodes.new("ShaderNodeTexCoord")
+
+
+def snap(p):
+    """模様の中心を一番近い表面の点に寄せる（中心が体の中に埋まって小さくならないように）"""
+    return min((v.co for v in me.vertices), key=lambda q: (q - p).length).copy()
+
+
+def layer(base, dist, edge, soft, color):
+    """dist < edge の所を color で塗る（境目を soft 幅でぼかす）"""
+    ramp = nt.nodes.new("ShaderNodeMapRange")
+    ramp.interpolation_type = "SMOOTHSTEP"
+    nt.links.new(dist, ramp.inputs["Value"])
+    ramp.inputs["From Min"].default_value = edge - soft
+    ramp.inputs["From Max"].default_value = edge + soft
+    ramp.inputs["To Min"].default_value = 1
+    ramp.inputs["To Max"].default_value = 0
+    m = nt.nodes.new("ShaderNodeMix")
+    m.data_type = "RGBA"
+    nt.links.new(ramp.outputs["Result"], m.inputs["Factor"])
+    nt.links.new(base, m.inputs[6])
+    m.inputs[7].default_value = (*color, 1)
+    return m.outputs[2]
+
+
+def distance(center, scale=(1, 1, 1)):
+    sub = nt.nodes.new("ShaderNodeVectorMath")
+    sub.operation = "SUBTRACT"
+    nt.links.new(coord.outputs["Object"], sub.inputs[0])
+    sub.inputs[1].default_value = center
+    mul = nt.nodes.new("ShaderNodeVectorMath")
+    mul.operation = "MULTIPLY"
+    nt.links.new(sub.outputs[0], mul.inputs[0])
+    mul.inputs[1].default_value = scale
+    ln = nt.nodes.new("ShaderNodeVectorMath")
+    ln.operation = "LENGTH"
+    nt.links.new(mul.outputs[0], ln.inputs[0])
+    return ln.outputs["Value"]
+
+
+def paint_details(base):
+    # 目のまわりの濃い紫（顔の正面だけに効くよう奥行きも楕円に含める）
+    for e in eyes:
+        base = layer(base, distance(e, (1 / 0.3, 1 / 0.3, 1 / 0.21)), 1.0, 0.12, DARK_PURPLE)
+    for c, r in brows:
+        base = layer(base, distance(snap(c)), r, 0.035, WHITE)
+    for c, r, rim in spots:
+        c = snap(c)
+        if rim:
+            base = layer(base, distance(c), r * 1.35, 0.01, rim)
+        base = layer(base, distance(c), r, 0.01, GREEN)
+    return base
+
+
+nt.links.new(paint_details(attr.outputs["Color"]), bsdf.inputs["Base Color"])
 tex = nt.nodes.new("ShaderNodeTexImage")
 tex.image = img
 nt.nodes.active = tex
@@ -223,7 +286,6 @@ img.save()
 
 # 焼いた画像で描く材質に差し替える
 nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
-nt.nodes.remove(attr)
 tex.image = bpy.data.images.load(img.filepath_raw, check_existing=False)
 
 # ---- パーツを体に合体して、アーマチュアに付け直す ----
