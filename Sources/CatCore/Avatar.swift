@@ -498,10 +498,14 @@ public struct HandHold: Sendable {
     private static func step(_ held: inout Held?, wrist: Vec2?, hand: [Vec2?]?, elbow: Vec2?, face: CatFaceRig?, now: Double,
                              hold: Double, behind: Double) -> Held? {
         if let wrist {
+            // 「見えている」のは手の検出で手が取れた時だけ。体の関節検出は隠れた手首も推測で返すので、
+            // 手首だけが頭のあたりにある時は、頭の後ろにある手首の推測位置として扱う
+            let seen = hand != nil
+            let behindNow = !seen && face.map { nearHead(wrist, $0) } ?? false
             // 肘は取れたり取れなかったりするので、見失っても少しだけ前の位置を使う
             let keepElbow = held.flatMap { now - $0.elbowTime <= hold ? $0.elbow : nil }
             held = Held(wrist: wrist, hand: hand, elbow: elbow ?? keepElbow,
-                        elbowTime: elbow != nil ? now : held?.elbowTime ?? now, time: now, behind: false)
+                        elbowTime: elbow != nil ? now : held?.elbowTime ?? now, time: now, behind: behindNow)
             return held
         }
         guard var h = held else { return nil }

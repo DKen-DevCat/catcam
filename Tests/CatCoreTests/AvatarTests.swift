@@ -441,22 +441,29 @@ final class HandHoldTests: XCTestCase {
         BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: leftWrist, rightShoulder: nil, rightElbow: nil, rightWrist: nil)
     }
 
+    /// 手の検出で取れた手（指の点つき）
+    private func visible(_ w: Vec2) -> BodyJoints {
+        var j = joints(leftWrist: w)
+        j.leftHand = [Vec2?](repeating: w, count: HandJoint.count)
+        return j
+    }
+
     func testVisibleHandIsInFront() {
         var h = HandHold()
-        let out = h.update(joints(leftWrist: Vec2(520, 200)), face: face(), now: 0)
+        let out = h.update(visible(Vec2(520, 200)), face: face(), now: 0)
         XCTAssertEqual(out.leftWrist, Vec2(520, 200))
         XCTAssertFalse(out.leftBehindHead)
     }
 
     func testHandLostOverHeadStaysBehindHead() {
         var h = HandHold()
-        _ = h.update(joints(leftWrist: Vec2(520, 200)), face: face(), now: 0)
+        _ = h.update(visible(Vec2(520, 200)), face: face(), now: 0)
         // 頭の上で見えなくなったら、2 秒たっても最後の位置のまま頭の後ろにいる
         let out = h.update(joints(leftWrist: nil), face: face(), now: 2)
         XCTAssertEqual(out.leftWrist, Vec2(520, 200))
         XCTAssertTrue(out.leftBehindHead)
         // また見えたら手前に戻る
-        let back = h.update(joints(leftWrist: Vec2(530, 210)), face: face(), now: 2.1)
+        let back = h.update(visible(Vec2(530, 210)), face: face(), now: 2.1)
         XCTAssertFalse(back.leftBehindHead)
     }
 
@@ -467,9 +474,27 @@ final class HandHoldTests: XCTestCase {
         XCTAssertNil(h.update(joints(leftWrist: nil), face: face(), now: 0.5).leftWrist)
     }
 
+    func testBodyOnlyWristNearHeadStaysBehind() {
+        var h = HandHold()
+        var visible = joints(leftWrist: Vec2(520, 200))
+        visible.leftHand = [Vec2?](repeating: Vec2(520, 190), count: HandJoint.count)
+        _ = h.update(visible, face: face(), now: 0)
+        // 手は見えず、体の関節検出だけが頭の後ろあたりの手首を推測で返す → 奥のまま、位置はその推測に合わせる
+        let out = h.update(joints(leftWrist: Vec2(540, 230)), face: face(), now: 0.5)
+        XCTAssertTrue(out.leftBehindHead)
+        XCTAssertEqual(out.leftWrist, Vec2(540, 230))
+    }
+
+    func testBodyOnlyWristAwayFromHeadIsInFront() {
+        var h = HandHold()
+        let out = h.update(joints(leftWrist: Vec2(900, 600)), face: face(), now: 0)
+        XCTAssertFalse(out.leftBehindHead)
+        XCTAssertEqual(out.leftWrist, Vec2(900, 600))
+    }
+
     func testBehindHeadGivesUpEventually() {
         var h = HandHold()
-        _ = h.update(joints(leftWrist: Vec2(520, 200)), face: face(), now: 0)
+        _ = h.update(visible(Vec2(520, 200)), face: face(), now: 0)
         XCTAssertNil(h.update(joints(leftWrist: nil), face: face(), now: 10).leftWrist)
     }
 
