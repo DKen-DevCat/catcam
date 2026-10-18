@@ -426,3 +426,67 @@ final class AvatarFingerTests: XCTestCase {
         XCTAssertEqual(b.scaled(width: 100, height: 10).rightHand?[0], Vec2(50, 5))
     }
 }
+
+final class HandHoldTests: XCTestCase {
+    /// 目の中点 (500,300)、目の間隔 100 の顔
+    private func face() -> CatFaceRig {
+        CatFaceRig(FaceLandmarks(
+            leftEye: [Vec2(430, 300), Vec2(470, 300), Vec2(450, 296), Vec2(450, 304)],
+            rightEye: [Vec2(530, 300), Vec2(570, 300), Vec2(550, 296), Vec2(550, 304)],
+            nose: [Vec2(500, 330), Vec2(500, 365)],
+            outerLips: [Vec2(470, 400), Vec2(530, 400)], innerLips: [Vec2(480, 400), Vec2(520, 400)]))!
+    }
+
+    private func joints(leftWrist: Vec2?) -> BodyJoints {
+        BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: leftWrist, rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+    }
+
+    func testVisibleHandIsInFront() {
+        var h = HandHold()
+        let out = h.update(joints(leftWrist: Vec2(520, 200)), face: face(), now: 0)
+        XCTAssertEqual(out.leftWrist, Vec2(520, 200))
+        XCTAssertFalse(out.leftBehindHead)
+    }
+
+    func testHandLostOverHeadStaysBehindHead() {
+        var h = HandHold()
+        _ = h.update(joints(leftWrist: Vec2(520, 200)), face: face(), now: 0)
+        // 頭の上で見えなくなったら、2 秒たっても最後の位置のまま頭の後ろにいる
+        let out = h.update(joints(leftWrist: nil), face: face(), now: 2)
+        XCTAssertEqual(out.leftWrist, Vec2(520, 200))
+        XCTAssertTrue(out.leftBehindHead)
+        // また見えたら手前に戻る
+        let back = h.update(joints(leftWrist: Vec2(530, 210)), face: face(), now: 2.1)
+        XCTAssertFalse(back.leftBehindHead)
+    }
+
+    func testHandLostAwayFromHeadDropsAfterShortHold() {
+        var h = HandHold()
+        _ = h.update(joints(leftWrist: Vec2(900, 600)), face: face(), now: 0)
+        XCTAssertEqual(h.update(joints(leftWrist: nil), face: face(), now: 0.3).leftWrist, Vec2(900, 600))
+        XCTAssertNil(h.update(joints(leftWrist: nil), face: face(), now: 0.5).leftWrist)
+    }
+
+    func testBehindHeadGivesUpEventually() {
+        var h = HandHold()
+        _ = h.update(joints(leftWrist: Vec2(520, 200)), face: face(), now: 0)
+        XCTAssertNil(h.update(joints(leftWrist: nil), face: face(), now: 10).leftWrist)
+    }
+
+    func testPoserPutsBehindHandBehindHead() throws {
+        let s = AvatarSkeleton(bones: [
+            AvatarBone(name: "spine", parent: -1, head: SIMD3(0, 0, 0), tail: SIMD3(0, 0, 0.8)),
+            AvatarBone(name: "Head", parent: 0, head: SIMD3(0, 0, 0.9), tail: SIMD3(0, 0, 1.8)),
+            AvatarBone(name: "upper_arm.L", parent: 0, head: SIMD3(0.4, 0, 0.6), tail: SIMD3(0.9, 0, 0.6)),
+            AvatarBone(name: "forearm.L", parent: 2, head: SIMD3(0.9, 0, 0.6), tail: SIMD3(1.3, 0, 0.6)),
+            AvatarBone(name: "hand.L", parent: 3, head: SIMD3(1.3, 0, 0.6), tail: SIMD3(1.5, 0, 0.6)),
+        ])
+        let p = AvatarPoser(skeleton: s, eyeCenter: SIMD3(0, -0.5, 1.4), eyeDistance: 0.7, headScale: 0.7)
+        var body = joints(leftWrist: Vec2(520, 200))
+        body.leftBehindHead = true
+        let out = try XCTUnwrap(p.pose(face: face(), body: body))
+        let heads = s.posedHeads(local: out.local, stretch: out.stretch, offsets: out.offsets)
+        // 頭の一番奥（後頭部 +0.65 くらい）より奥に手が来る
+        XCTAssertGreaterThan(heads[s.index(of: "hand.L")!].y, 1.0)
+    }
+}

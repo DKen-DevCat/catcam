@@ -110,6 +110,9 @@ public struct BodyJoints: Equatable, Sendable {
     /// 手の 21 点（`HandJoint` の並び）。取れなかった点は nil
     public var leftHand: [Vec2?]?
     public var rightHand: [Vec2?]?
+    /// 頭の後ろに回って見えなくなった手（最後に見えた位置のまま、頭より奥に描く）
+    public var leftBehindHead = false
+    public var rightBehindHead = false
 
     public init(leftShoulder: Vec2?, leftElbow: Vec2?, leftWrist: Vec2?,
                 rightShoulder: Vec2?, rightElbow: Vec2?, rightWrist: Vec2?) {
@@ -193,7 +196,7 @@ public struct AvatarPoser: Sendable {
     public var eyeDistance: Float
     /// 人の顔より何倍大きく描くか（モデルは頭でっかちなので、人の顔を覆うよう大きめにする）
     public var headScale: Float
-    /// 手を検出している間、前腕から先を手前に出す量（モデルの単位。顔の一番手前は -0.8 くらい）
+    /// 前腕から先を手前（または奥）に出す量（モデルの単位。顔の一番手前は -0.8、後頭部は +0.65 くらい）
     public var handDepth: Float = 1.5
 
     public init(skeleton: AvatarSkeleton, eyeCenter: SIMD3<Float>, eyeDistance: Float, headScale: Float) {
@@ -243,8 +246,14 @@ public struct AvatarPoser: Sendable {
 
         // 腕: 肘まで取れていれば向きをそのまま写す。手首だけなら、手首に前腕の先が来るよう肘の曲げを逆算する。
         // どちらもなければ下ろしておく
-        for (side, shoulder, elbow, wrist, hand) in [("L", body?.leftShoulder, body?.leftElbow, body?.leftWrist, body?.leftHand),
-                                                     ("R", body?.rightShoulder, body?.rightElbow, body?.rightWrist, body?.rightHand)] {
+        typealias Arm = (side: String, shoulder: Vec2?, elbow: Vec2?, wrist: Vec2?, hand: [Vec2?]?, behind: Bool)
+        let arms: [Arm] = [
+            ("L", body?.leftShoulder, body?.leftElbow, body?.leftWrist, body?.leftHand, body?.leftBehindHead ?? false),
+            ("R", body?.rightShoulder, body?.rightElbow, body?.rightWrist, body?.rightHand, body?.rightBehindHead ?? false),
+        ]
+        for (side, shoulder, elbow, wrist, hand, behind) in arms {
+            // 見えている手は顔より手前、頭の後ろに回った手は頭より奥。正面からの平行投影なので見た目の位置は変わらない
+            let depth = SIMD3<Float>(0, behind ? handDepth : -handDepth, 0)
             defer { if let hand { fingers(&out, side: side, hand: hand) } }
             guard let upper = skeleton.index(of: "upper_arm.\(side)"), let fore = skeleton.index(of: "forearm.\(side)") else { continue }
             let outward: Float = side == "L" ? 1 : -1
@@ -252,14 +261,12 @@ public struct AvatarPoser: Sendable {
             _ = shoulder
             if let e = elbow {
                 // 肘が取れていれば、肘と手首を人の位置にそのまま重ねる（肩はモデルの肩のまま）
-                if wrist != nil { out.offsets[fore] = SIMD3(0, -handDepth, 0) }
+                if wrist != nil { out.offsets[fore] = depth }
                 place(&out, upper: upper, fore: fore, elbow: out.unproject(SIMD2(Float(e.x), Float(e.y))),
                       wrist: wrist.map { out.unproject(SIMD2(Float($0.x), Float($0.y))) })
             } else if let w = wrist {
                 let target = out.unproject(SIMD2(Float(w.x), Float(w.y)))
-                // 手を見せている時は顔より手前にあるとみなし、前腕から先を手前（-Y）に出す。
-                // 正面からの平行投影なので、見た目の位置は変わらず前後関係だけが変わる
-                out.offsets[fore] = SIMD3(0, -handDepth, 0)
+                out.offsets[fore] = depth
                 if let h = hand, let a = h[HandJoint.wrist], let b = h[HandJoint.middle], (a.x != b.x || a.y != b.y) {
                     // 肘は取れないので、前腕は手と同じ向きとみなして手首から逆にたどる
                     let d = simd_normalize(SIMD2(Float(b.x - a.x), Float(-(b.y - a.y))))
@@ -439,5 +446,78 @@ public struct AvatarDebugJoint: Sendable {
     public var error: Float? {
         guard let human, let avatar else { return nil }
         return simd_length(avatar - SIMD2(Float(human.x), Float(human.y)))
+    }
+}
+
+/// 手を見失った時の扱い。カメラに映っているかどうかを前後の手がかりにする:
+/// 頭のあたりで見えなくなった手は頭の後ろに回ったとみなして最後の位置に残し、
+/// それ以外の所で見えなくなった手は少しだけ残してから離す
+public struct HandHold: Sendable {
+    /// 頭から離れた所で見失った手を残す秒数
+    public var holdTime = 0.4
+    /// 頭の後ろに回った手を残す秒数（戻ってこなければ離す）
+    public var behindTime = 5.0
+
+    private struct Held: Sendable {
+        var wrist: Vec2
+        var hand: [Vec2?]?
+        var elbow: Vec2?
+        var elbowTime: Double
+        var time: Double
+        var behind: Bool
+    }
+
+    private var left: Held?
+    private var right: Held?
+
+    public init() {}
+
+    public mutating func update(_ j: BodyJoints?, face: CatFaceRig?, now: Double) -> BodyJoints {
+        var out = BodyJoints(leftShoulder: j?.leftShoulder, leftElbow: nil, leftWrist: nil,
+                             rightShoulder: j?.rightShoulder, rightElbow: nil, rightWrist: nil)
+        if let h = Self.step(&left, wrist: j?.leftWrist, hand: j?.leftHand, elbow: j?.leftElbow, face: face, now: now,
+                             hold: holdTime, behind: behindTime) {
+            out.leftWrist = h.wrist
+            out.leftHand = h.hand
+            out.leftElbow = h.elbow
+            out.leftBehindHead = h.behind
+        }
+        if let h = Self.step(&right, wrist: j?.rightWrist, hand: j?.rightHand, elbow: j?.rightElbow, face: face, now: now,
+                             hold: holdTime, behind: behindTime) {
+            out.rightWrist = h.wrist
+            out.rightHand = h.hand
+            out.rightElbow = h.elbow
+            out.rightBehindHead = h.behind
+        }
+        return out
+    }
+
+    private static func step(_ held: inout Held?, wrist: Vec2?, hand: [Vec2?]?, elbow: Vec2?, face: CatFaceRig?, now: Double,
+                             hold: Double, behind: Double) -> Held? {
+        if let wrist {
+            // 肘は取れたり取れなかったりするので、見失っても少しだけ前の位置を使う
+            let keepElbow = held.flatMap { now - $0.elbowTime <= hold ? $0.elbow : nil }
+            held = Held(wrist: wrist, hand: hand, elbow: elbow ?? keepElbow,
+                        elbowTime: elbow != nil ? now : held?.elbowTime ?? now, time: now, behind: false)
+            return held
+        }
+        guard var h = held else { return nil }
+        // 見失った瞬間に、最後の位置が頭のあたりなら頭の後ろに回ったとみなす
+        if !h.behind, let face, nearHead(h.wrist, face) { h.behind = true }
+        held = h
+        guard now - h.time <= (h.behind ? behind : hold) else {
+            held = nil
+            return nil
+        }
+        return h
+    }
+
+    /// 頭（目の上から頭のてっぺんの上まで、あごまで）の範囲にあるか
+    static func nearHead(_ p: Vec2, _ face: CatFaceRig) -> Bool {
+        let mid = (face.leftEye.center + face.rightEye.center) * 0.5
+        let d = face.eyeDistance
+        let rel = p - mid
+        let x = rel.dot(face.axis), up = rel.dot(face.up)
+        return abs(x) < 1.8 * d && up > -1.5 * d && up < 2.6 * d
     }
 }

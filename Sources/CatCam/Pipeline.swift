@@ -65,11 +65,8 @@ final class Pipeline {
     private var idle: AvatarIdle?
     private var avatarPose: AvatarPose?
     private var avatarSeen: CFTimeInterval = 0
-    private typealias HeldHand = (wrist: Vec2, points: [Vec2?]?, time: CFTimeInterval)
-    private var lastLeftHand: HeldHand?
-    private var lastRightHand: HeldHand?
-    private var lastLeftElbow: (Vec2, CFTimeInterval)?
-    private var lastRightElbow: (Vec2, CFTimeInterval)?
+    /// 手を見失った時に、頭の後ろに回ったのか画面の外に出たのかを見分けて残す
+    private var handHold = HandHold()
     /// true なら人とアバターの関節を Scene に入れ、毎秒ログに出す
     var debugJoints = false
     private var lastDebugLog: CFTimeInterval = 0
@@ -170,7 +167,7 @@ final class Pipeline {
     /// 顔を一瞬見失っても消えないよう、0.5 秒は前の姿勢を残す
     private func updateAvatar(size: (w: Double, h: Double), now: CFTimeInterval) {
         guard let poser else { return }
-        let hands = holdHands(faceDetector.latestHands(maxAge: 0.3)?.scaled(width: size.w, height: size.h), now: now)
+        let hands = handHold.update(faceDetector.latestHands(maxAge: 0.3)?.scaled(width: size.w, height: size.h), face: rigs.first, now: now)
         if let target = poser.pose(face: rigs.first, body: hands) {
             avatarPose = target.blended(from: avatarPose, t: 0.5)
             avatarSeen = now
@@ -193,22 +190,6 @@ final class Pipeline {
             return "\(j.name) H\(h) A\(f(j.avatar))" + (j.error.map { String(format: " Δ%.0f", $0) } ?? "")
         }
         print("joints " + parts.joined(separator: " | "))
-    }
-
-    /// 手を一瞬見失っても前足が落ちないよう、左右それぞれ 0.4 秒は最後の位置を使う
-    private func holdHands(_ j: BodyJoints?, now: CFTimeInterval) -> BodyJoints {
-        if let l = j?.leftWrist { lastLeftHand = (l, j?.leftHand, now) }
-        if let r = j?.rightWrist { lastRightHand = (r, j?.rightHand, now) }
-        if let e = j?.leftElbow { lastLeftElbow = (e, now) }
-        if let e = j?.rightElbow { lastRightElbow = (e, now) }
-        func held(_ h: HeldHand?) -> HeldHand? { h.flatMap { now - $0.time <= 0.4 ? $0 : nil } }
-        func held(_ e: (Vec2, CFTimeInterval)?) -> Vec2? { e.flatMap { now - $0.1 <= 0.4 ? $0.0 : nil } }
-        let l = held(lastLeftHand), r = held(lastRightHand)
-        var out = BodyJoints(leftShoulder: j?.leftShoulder, leftElbow: held(lastLeftElbow), leftWrist: l?.wrist,
-                             rightShoulder: j?.rightShoulder, rightElbow: held(lastRightElbow), rightWrist: r?.wrist)
-        out.leftHand = l?.points
-        out.rightHand = r?.points
-        return out
     }
 
     /// 新しく湧いたウィンドウに、湧いた瞬間の塊の形で猫を割り当てる。画面に出ている猫とは重複させない
