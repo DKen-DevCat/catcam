@@ -13,20 +13,24 @@ final class FaceDetector {
     private let queue = DispatchQueue(label: "catcam.face", qos: .userInitiated)
     // 毎回作るとリビジョン解決などの初期化コストが乗るので使い回す（queue 上でのみ触る）
     private let request = VNDetectFaceLandmarksRequest()
-    // アバターの腕を動かすための体の関節。顔と同じ縮小画像で一緒に回す
-    private let bodyRequest = VNDetectHumanBodyPoseRequest()
-    var bodyEnabled = false
+    // アバターの前足を動かすための手。体全体の関節はカメラに近いと取れないので、手だけを顔と同じ縮小画像で一緒に探す
+    private let handRequest: VNDetectHumanHandPoseRequest = {
+        let r = VNDetectHumanHandPoseRequest()
+        r.maximumHandCount = 2
+        return r
+    }()
+    var handsEnabled = false
     private let sequenceHandler = VNSequenceRequestHandler()
     private let scaler: GPUScaler?
     private let lock = NSLock()
     private var busy = false
     private var lastSubmit: CFTimeInterval = 0
     private var faces: [Face] = []
-    private var body: BodyJoints?
+    private var hands: BodyJoints?
     private var resultTime: CFTimeInterval = 0
     private let onDuration: (Double) -> Void
 
-    /// 体の関節の信頼度の要約（診断ログ用）
+    /// 手の検出状況の要約（診断ログ用）
     var onJoints: ((String) -> Void)?
 
     init(device: MTLDevice?, onDuration: @escaping (Double) -> Void) {
@@ -48,15 +52,15 @@ final class FaceDetector {
         queue.async { [self] in
             let t0 = CACurrentMediaTime()
             let input = scaler?.scale(pb) ?? pb
-            let withBody = bodyEnabled
-            try? sequenceHandler.perform(withBody ? [request, bodyRequest] : [request], on: input, orientation: .up)
+            let withHands = handsEnabled
+            try? sequenceHandler.perform(withHands ? [request, handRequest] : [request], on: input, orientation: .up)
             let found = (request.results ?? []).map(Self.face)
-            let joints = withBody ? Self.body(bodyRequest.results?.first) : nil
-            if withBody { onJoints?(Self.summary(bodyRequest.results ?? [])) }
+            let joints = withHands ? Self.hands(handRequest.results ?? [], faceX: found.first.map { $0.rect.x + $0.rect.w / 2 }) : nil
+            if withHands { onJoints?(Self.summary(handRequest.results ?? [])) }
             let t1 = CACurrentMediaTime()
             lock.lock()
             faces = found
-            body = joints
+            hands = joints
             resultTime = t1
             busy = false
             lock.unlock()
@@ -71,34 +75,37 @@ final class FaceDetector {
         return CACurrentMediaTime() - resultTime <= maxAge ? faces : []
     }
 
-    /// `maxAge` 秒より古い結果は捨てる
-    func latestBody(maxAge: CFTimeInterval) -> BodyJoints? {
+    /// 手首の位置だけを入れた関節（`maxAge` 秒より古い結果は捨てる）
+    func latestHands(maxAge: CFTimeInterval) -> BodyJoints? {
         lock.lock()
         defer { lock.unlock() }
-        return CACurrentMediaTime() - resultTime <= maxAge ? body : nil
+        return CACurrentMediaTime() - resultTime <= maxAge ? hands : nil
     }
 
-    /// 例: "1人 lS.92 lE.40 lW.05 rS.90 rE.00 rW.00"
-    private static func summary(_ obs: [VNHumanBodyPoseObservation]) -> String {
-        guard let o = obs.first else { return "0人" }
-        let names: [(String, VNHumanBodyPoseObservation.JointName)] = [
-            ("lS", .leftShoulder), ("lE", .leftElbow), ("lW", .leftWrist),
-            ("rS", .rightShoulder), ("rE", .rightElbow), ("rW", .rightWrist),
-        ]
-        return "\(obs.count)人 " + names.map { label, j in
-            String(format: "%@%.2f", label, (try? o.recognizedPoint(j).confidence).map(Double.init) ?? 0)
-        }.joined(separator: " ")
+    /// 例: "手2 L0.92 R0.88"（L/R は本人から見た左右、数字は手首の信頼度）
+    private static func summary(_ obs: [VNHumanHandPoseObservation]) -> String {
+        "手\(obs.count)" + obs.map { o in
+            let side = o.chirality == .left ? "L" : o.chirality == .right ? "R" : "?"
+            return String(format: " %@%.2f", side, (try? o.recognizedPoint(.wrist).confidence).map(Double.init) ?? 0)
+        }.joined()
     }
 
-    /// 関節は本人から見た左右。信頼度の低い関節は nil にする（正規化座標・左上原点）
-    private static func body(_ o: VNHumanBodyPoseObservation?) -> BodyJoints? {
-        guard let o else { return nil }
-        func p(_ name: VNHumanBodyPoseObservation.JointName) -> Vec2? {
-            guard let r = try? o.recognizedPoint(name), r.confidence > 0.3 else { return nil }
-            return Vec2(Double(r.location.x), Double(1 - r.location.y))
+    /// 手首を本人から見た左右に振り分ける。左右が分からない手は、顔より画像の右にあれば左手とみなす
+    /// （左右反転前の画像では本人の左が右側に写る）。正規化座標・左上原点
+    private static func hands(_ obs: [VNHumanHandPoseObservation], faceX: Double?) -> BodyJoints {
+        var j = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: nil, rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        for o in obs {
+            guard let r = try? o.recognizedPoint(.wrist), r.confidence > 0.3 else { continue }
+            let p = Vec2(Double(r.location.x), Double(1 - r.location.y))
+            let isLeft: Bool
+            switch o.chirality {
+            case .left: isLeft = true
+            case .right: isLeft = false
+            default: isLeft = p.x > (faceX ?? 0.5)
+            }
+            if isLeft { j.leftWrist = p } else { j.rightWrist = p }
         }
-        return BodyJoints(leftShoulder: p(.leftShoulder), leftElbow: p(.leftElbow), leftWrist: p(.leftWrist),
-                          rightShoulder: p(.rightShoulder), rightElbow: p(.rightElbow), rightWrist: p(.rightWrist))
+        return j
     }
 
     /// Vision は左下原点で、ランドマークは顔の枠に対する相対座標。左上原点の画像座標に直す

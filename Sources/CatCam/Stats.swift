@@ -74,7 +74,7 @@ final class Stats {
             blobs, tracks, (cpu - cpuStart) / dt * 100
         ) + String(format: "  area %.0f  frozen %.0f%%",
                    camFrames > 0 ? Double(areaSum) / Double(camFrames) : 0,
-                   camFrames > 0 ? Double(frozenFrames) / Double(camFrames) * 100 : 0) + "  joints[\(joints)]"
+                   camFrames > 0 ? Double(frozenFrames) / Double(camFrames) * 100 : 0) + "  hands[\(joints)]"
         areaSum = 0
         frozenFrames = 0
         camFrames = 0

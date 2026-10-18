@@ -180,3 +180,83 @@ final class AvatarIdleTests: XCTestCase {
         XCTAssertEqual(idle.apply(p, time: 1.3).local[0], p.local[0])
     }
 }
+
+final class AvatarReachTests: XCTestCase {
+    private let bones = [
+        AvatarBone(name: "spine", parent: -1, head: SIMD3(0, 0, 0), tail: SIMD3(0, 0, 0.8)),
+        AvatarBone(name: "spine.003", parent: 0, head: SIMD3(0, 0, 0.4), tail: SIMD3(0, 0, 0.8)),
+        AvatarBone(name: "Head", parent: 1, head: SIMD3(0, 0, 0.9), tail: SIMD3(0, 0, 1.8)),
+        AvatarBone(name: "upper_arm.L", parent: 1, head: SIMD3(0.4, 0, 0.6), tail: SIMD3(0.9, 0, 0.6)),
+        AvatarBone(name: "forearm.L", parent: 3, head: SIMD3(0.9, 0, 0.6), tail: SIMD3(1.3, 0, 0.6)),
+        AvatarBone(name: "upper_arm.R", parent: 1, head: SIMD3(-0.4, 0, 0.6), tail: SIMD3(-0.9, 0, 0.6)),
+        AvatarBone(name: "forearm.R", parent: 5, head: SIMD3(-0.9, 0, 0.6), tail: SIMD3(-1.3, 0, 0.6)),
+    ]
+
+    func testStretchLengthensBoneAndMovesChild() {
+        let s = AvatarSkeleton(bones: bones)
+        var stretch = [Float](repeating: 1, count: bones.count)
+        stretch[3] = 2
+        let m = s.skinMatrices(local: s.restPose, stretch: stretch)
+        // 上腕の先（= 前腕の根元）が 0.5 → 1.0 離れる
+        let elbow = m[4] * SIMD4(0.9, 0, 0.6, 1)
+        XCTAssertEqual(elbow.x, 1.4, accuracy: 1e-5)
+        // 上腕の太さ方向（Z）は伸びない
+        let side = m[3] * SIMD4(0.4, 0, 0.7, 1)
+        XCTAssertEqual(side.z, 0.7, accuracy: 1e-5)
+    }
+
+    private func poser() -> AvatarPoser {
+        AvatarPoser(skeleton: AvatarSkeleton(bones: bones), eyeCenter: SIMD3(0, -0.5, 1.4), eyeDistance: 0.7, headScale: 0.7)
+    }
+
+    private func face() -> CatFaceRig {
+        CatFaceRig(FaceLandmarks(
+            leftEye: [Vec2(430, 300), Vec2(470, 300), Vec2(450, 296), Vec2(450, 304)],
+            rightEye: [Vec2(530, 300), Vec2(570, 300), Vec2(550, 296), Vec2(550, 304)],
+            nose: [Vec2(500, 330), Vec2(500, 365)],
+            outerLips: [Vec2(470, 400), Vec2(530, 400)], innerLips: [Vec2(480, 400), Vec2(520, 400)]))!
+    }
+
+    /// 前腕の先（手首）が画像のどこに来たか
+    private func wristOnImage(_ p: AvatarPoser, _ out: AvatarPose, side: String = "L") -> SIMD2<Float> {
+        let i = p.skeleton.index(of: "forearm.\(side)")!
+        let w = p.skeleton.skinMatrices(local: out.local, stretch: out.stretch)[i] * SIMD4(p.skeleton.bones[i].tail, 1)
+        return out.project(SIMD3(w.x, w.y, w.z))
+    }
+
+    func testHandWithinReachPutsWristOnHand() throws {
+        let p = poser()
+        // scale = 100 * 0.7 / 0.7 = 100px。肩 (0.4, 0.6) は画像の (540, 380) あたり。腕の長さは 0.9 = 90px
+        let target = Vec2(560, 330)
+        let out = try XCTUnwrap(p.pose(face: face(), body: BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: target,
+                                                                        rightShoulder: nil, rightElbow: nil, rightWrist: nil)))
+        let w = wristOnImage(p, out)
+        XCTAssertEqual(w.x, 560, accuracy: 0.5)
+        XCTAssertEqual(w.y, 330, accuracy: 0.5)
+        XCTAssertEqual(out.stretch[3], 1)
+    }
+
+    func testFarHandStretchesArmToReach() throws {
+        let p = poser()
+        let target = Vec2(800, 380)
+        let out = try XCTUnwrap(p.pose(face: face(), body: BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: target,
+                                                                        rightShoulder: nil, rightElbow: nil, rightWrist: nil)))
+        let w = wristOnImage(p, out)
+        XCTAssertEqual(w.x, 800, accuracy: 0.5)
+        XCTAssertEqual(w.y, 380, accuracy: 0.5)
+        XCTAssertGreaterThan(out.stretch[3], 1)
+    }
+
+    func testElbowBendsDownward() throws {
+        let p = poser()
+        let out = try XCTUnwrap(p.pose(face: face(), body: BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: Vec2(560, 330),
+                                                                        rightShoulder: nil, rightElbow: nil, rightWrist: nil)))
+        let i = p.skeleton.index(of: "upper_arm.L")!
+        let e = p.skeleton.skinMatrices(local: out.local, stretch: out.stretch)[i] * SIMD4(p.skeleton.bones[i].tail, 1)
+        let elbow = out.project(SIMD3(e.x, e.y, e.z))
+        // 肩と手を結ぶ線より下（画像 y が大きい）に肘がある
+        let shoulder = out.project(SIMD3(0.4, 0, 0.6))
+        let t = (elbow.x - shoulder.x) / (560 - shoulder.x)
+        XCTAssertGreaterThan(elbow.y, shoulder.y + (330 - shoulder.y) * t)
+    }
+}

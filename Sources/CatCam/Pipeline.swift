@@ -63,6 +63,8 @@ final class Pipeline {
     private var idle: AvatarIdle?
     private var avatarPose: AvatarPose?
     private var avatarSeen: CFTimeInterval = 0
+    private var lastLeftWrist: (Vec2, CFTimeInterval)?
+    private var lastRightWrist: (Vec2, CFTimeInterval)?
     private lazy var faceDetector: FaceDetector = {
         let d = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
         d.onJoints = { [stats] s in stats.recordJoints(s) }
@@ -105,7 +107,7 @@ final class Pipeline {
             poser = p
             idle = p.map { AvatarIdle(skeleton: $0.skeleton) }
             avatarPose = nil
-            faceDetector.bodyEnabled = p != nil
+            faceDetector.handsEnabled = p != nil
         }
     }
 
@@ -158,13 +160,22 @@ final class Pipeline {
     /// 顔を一瞬見失っても消えないよう、0.5 秒は前の姿勢を残す
     private func updateAvatar(size: (w: Double, h: Double), now: CFTimeInterval) {
         guard let poser else { return }
-        let body = faceDetector.latestBody(maxAge: 0.3)?.scaled(width: size.w, height: size.h)
-        if let target = poser.pose(face: rigs.first, body: body) {
+        let hands = holdHands(faceDetector.latestHands(maxAge: 0.3)?.scaled(width: size.w, height: size.h), now: now)
+        if let target = poser.pose(face: rigs.first, body: hands) {
             avatarPose = target.blended(from: avatarPose, t: 0.5)
             avatarSeen = now
         } else if now - avatarSeen > 0.5 {
             avatarPose = nil
         }
+    }
+
+    /// 手を一瞬見失っても前足が落ちないよう、左右それぞれ 0.4 秒は最後の位置を使う
+    private func holdHands(_ j: BodyJoints?, now: CFTimeInterval) -> BodyJoints {
+        if let l = j?.leftWrist { lastLeftWrist = (l, now) }
+        if let r = j?.rightWrist { lastRightWrist = (r, now) }
+        func held(_ h: (Vec2, CFTimeInterval)?) -> Vec2? { h.flatMap { now - $0.1 <= 0.4 ? $0.0 : nil } }
+        return BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: held(lastLeftWrist),
+                          rightShoulder: nil, rightElbow: nil, rightWrist: held(lastRightWrist))
     }
 
     /// 新しく湧いたウィンドウに、湧いた瞬間の塊の形で猫を割り当てる。画面に出ている猫とは重複させない

@@ -53,7 +53,7 @@ final class AvatarRenderer {
         pass.depthAttachment.storeAction = .dontCare
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
         if let pose {
-            var bones = model.skeleton.skinMatrices(local: pose.local)
+            var bones = model.skeleton.skinMatrices(local: pose.local, stretch: pose.stretch)
             var u = Uniforms(size: SIMD2(Float(width), Float(height)), origin: pose.origin, scale: pose.scale, mouthOpen: pose.mouthOpen)
             enc.setRenderPipelineState(pipeline)
             enc.setDepthStencilState(depthState)

@@ -39,16 +39,32 @@ public struct AvatarSkeleton: Sendable {
         return w
     }
 
-    /// 頂点に掛ける行列（休止姿勢の座標 → 変形後の座標）
-    public func skinMatrices(local: [simd_quatf]) -> [simd_float4x4] {
+    /// 頂点に掛ける行列（休止姿勢の座標 → 変形後の座標）。
+    /// `stretch` は骨ごとの長さの倍率（骨の向きにだけ伸ばす。太さは変えない）
+    public func skinMatrices(local: [simd_quatf], stretch: [Float]? = nil) -> [simd_float4x4] {
+        let w = worldRotations(local: local)
+        let heads = posedHeads(local: local, stretch: stretch)
+        return bones.indices.map { i in
+            Self.translation(heads[i]) * simd_float4x4(w[i]) * stretchMatrix(i, stretch) * Self.translation(-bones[i].head)
+        }
+    }
+
+    /// 変形後の各骨の根元の位置
+    public func posedHeads(local: [simd_quatf], stretch: [Float]? = nil) -> [SIMD3<Float>] {
         let w = worldRotations(local: local)
         var heads = bones.map(\.head)
         for (i, b) in bones.enumerated() where b.parent >= 0 {
-            heads[i] = heads[b.parent] + w[b.parent].act(b.head - bones[b.parent].head)
+            let offset = stretchMatrix(b.parent, stretch) * SIMD4(b.head - bones[b.parent].head, 0)
+            heads[i] = heads[b.parent] + w[b.parent].act(SIMD3(offset.x, offset.y, offset.z))
         }
-        return bones.indices.map { i in
-            Self.translation(heads[i]) * simd_float4x4(w[i]) * Self.translation(-bones[i].head)
-        }
+        return heads
+    }
+
+    private func stretchMatrix(_ i: Int, _ stretch: [Float]?) -> simd_float4x4 {
+        guard let k = stretch?[i], k != 1 else { return matrix_identity_float4x4 }
+        let u = simd_normalize(bones[i].tail - bones[i].head)
+        let m3 = matrix_identity_float3x3 + (k - 1) * simd_float3x3(columns: (u * u.x, u * u.y, u * u.z))
+        return simd_float4x4(columns: (SIMD4(m3.columns.0, 0), SIMD4(m3.columns.1, 0), SIMD4(m3.columns.2, 0), SIMD4(0, 0, 0, 1)))
     }
 
     /// 骨を、正面から見た画面（モデルの XZ 平面、x 右・y 上）で `dir` の向きにする。親の回転は打ち消す
@@ -98,6 +114,21 @@ public struct AvatarPose: Sendable {
     public var scale: Float
     /// 0 閉じている 〜 1 大きく開いている
     public var mouthOpen: Float
+    /// 骨ごとの長さの倍率（手に届かせるために腕を伸ばす）
+    public var stretch: [Float]
+
+    public init(local: [simd_quatf], origin: SIMD2<Float>, scale: Float, mouthOpen: Float, stretch: [Float]? = nil) {
+        self.local = local
+        self.origin = origin
+        self.scale = scale
+        self.mouthOpen = mouthOpen
+        self.stretch = stretch ?? Array(repeating: 1, count: local.count)
+    }
+
+    /// 画像のピクセル座標をモデルの (X, Z) に戻す
+    public func unproject(_ p: SIMD2<Float>) -> SIMD2<Float> {
+        SIMD2((p.x - origin.x) / scale, (origin.y - p.y) / scale)
+    }
 
     public func project(_ p: SIMD3<Float>) -> SIMD2<Float> {
         SIMD2(origin.x + p.x * scale, origin.y - p.z * scale)
@@ -111,6 +142,9 @@ public struct AvatarPose: Sendable {
         r.origin = prev.origin + (origin - prev.origin) * t
         r.scale = prev.scale + (scale - prev.scale) * t
         r.mouthOpen = prev.mouthOpen + (mouthOpen - prev.mouthOpen) * t
+        if prev.stretch.count == stretch.count {
+            r.stretch = zip(prev.stretch, stretch).map { $0 + ($1 - $0) * t }
+        }
         return r
     }
 }
@@ -158,26 +192,59 @@ public struct AvatarPoser: Sendable {
             pose[head] = parentWorld.inverse * world
         }
 
-        // 腕: 肩 → 肘 → 手首 の向きをそのまま写す。取れていない腕は下ろしておく
-        for (side, shoulder, elbow, wrist) in [("L", body?.leftShoulder, body?.leftElbow, body?.leftWrist),
-                                               ("R", body?.rightShoulder, body?.rightElbow, body?.rightWrist)] {
-            guard let upper = skeleton.index(of: "upper_arm.\(side)"), let fore = skeleton.index(of: "forearm.\(side)") else { continue }
-            let out: Float = side == "L" ? 1 : -1
-            func dir(_ a: Vec2, _ b: Vec2) -> SIMD2<Float> { SIMD2(Float(b.x - a.x), Float(-(b.y - a.y))) }
-            if let s = shoulder, let e = elbow {
-                skeleton.point(&pose, bone: upper, toward: dir(s, e))
-                skeleton.point(&pose, bone: fore, toward: wrist.map { dir(e, $0) } ?? dir(s, e))
-            } else {
-                skeleton.point(&pose, bone: upper, toward: SIMD2(0.35 * out, -1))
-                skeleton.point(&pose, bone: fore, toward: SIMD2(0.2 * out, -1))
-            }
-        }
-
         // 置き場所: モデルの目の中点を人の目の中点に重ね、目の間隔で大きさを決める
         let scale = Float(face.eyeDistance) * headScale / eyeDistance
         let mid = (face.leftEye.center + face.rightEye.center) * 0.5
         let origin = SIMD2(Float(mid.x) - eyeCenter.x * scale, Float(mid.y) + eyeCenter.z * scale)
-        return AvatarPose(local: pose, origin: origin, scale: scale, mouthOpen: Float(face.mouthOpen))
+        var out = AvatarPose(local: pose, origin: origin, scale: scale, mouthOpen: Float(face.mouthOpen))
+
+        // 腕: 肘まで取れていれば向きをそのまま写す。手首だけなら、手首に前腕の先が来るよう肘の曲げを逆算する。
+        // どちらもなければ下ろしておく
+        for (side, shoulder, elbow, wrist) in [("L", body?.leftShoulder, body?.leftElbow, body?.leftWrist),
+                                               ("R", body?.rightShoulder, body?.rightElbow, body?.rightWrist)] {
+            guard let upper = skeleton.index(of: "upper_arm.\(side)"), let fore = skeleton.index(of: "forearm.\(side)") else { continue }
+            let outward: Float = side == "L" ? 1 : -1
+            func dir(_ a: Vec2, _ b: Vec2) -> SIMD2<Float> { SIMD2(Float(b.x - a.x), Float(-(b.y - a.y))) }
+            if let s = shoulder, let e = elbow {
+                skeleton.point(&out.local, bone: upper, toward: dir(s, e))
+                skeleton.point(&out.local, bone: fore, toward: wrist.map { dir(e, $0) } ?? dir(s, e))
+            } else if let w = wrist {
+                reach(&out, upper: upper, fore: fore, target: out.unproject(SIMD2(Float(w.x), Float(w.y))))
+            } else {
+                skeleton.point(&out.local, bone: upper, toward: SIMD2(0.35 * outward, -1))
+                skeleton.point(&out.local, bone: fore, toward: SIMD2(0.2 * outward, -1))
+            }
+        }
+        return out
+    }
+
+    /// 上腕と前腕の 2 本で、前腕の先を `target`（モデルの XZ 平面）に届かせる。肘は下向きに曲げる。
+    /// 届かなければ 2 本とも同じ割合で伸ばす
+    private func reach(_ out: inout AvatarPose, upper: Int, fore: Int, target: SIMD2<Float>) {
+        let b = skeleton.bones
+        let l1 = simd_length(b[upper].tail - b[upper].head), l2 = simd_length(b[fore].tail - b[fore].head)
+        let h = skeleton.posedHeads(local: out.local, stretch: out.stretch)[upper]
+        let s = SIMD2(h.x, h.z)
+        let v = target - s
+        let d = simd_length(v)
+        guard d > 1e-4 else { return }
+        if d >= (l1 + l2) * 0.999 {
+            skeleton.point(&out.local, bone: upper, toward: v)
+            skeleton.point(&out.local, bone: fore, toward: v)
+            let k = d / (l1 + l2)
+            out.stretch[upper] = k
+            out.stretch[fore] = k
+            return
+        }
+        out.stretch[upper] = 1
+        out.stretch[fore] = 1
+        // 余弦定理で肩の角度のずれを出し、肘が下に来る側を選ぶ
+        let a = atan2(v.y, v.x)
+        let delta = acos(min(max((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1), 1))
+        let candidates = [a + delta, a - delta].map { s + l1 * SIMD2(cos($0), sin($0)) }
+        let elbow = candidates[0].y < candidates[1].y ? candidates[0] : candidates[1]
+        skeleton.point(&out.local, bone: upper, toward: elbow - s)
+        skeleton.point(&out.local, bone: fore, toward: target - elbow)
     }
 }
 
