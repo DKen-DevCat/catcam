@@ -40,7 +40,7 @@ bpy.ops.object.modifier_apply(modifier="Mirror")
 # 尻尾の骨を曲げて伸ばした姿勢を作り、それを新しい休止姿勢として焼き込む
 TAIL = [f"TailBase{'' if i == 0 else f'.{i:03d}'}" for i in range(6)]
 TAIL_DIRS = [(0, 1, -0.3), (0, 0.7, 0.7), (0, 0.2, 1), (0, 0, 1), (0, -0.1, 1), (0, -0.25, 1)]
-TAIL_STRETCH = 2.3
+TAIL_STRETCH = 1.9
 for name in TAIL:
     arm.data.bones[name].inherit_scale = "NONE"
 bpy.context.view_layer.update()
