@@ -26,6 +26,9 @@ final class FaceDetector {
     private var resultTime: CFTimeInterval = 0
     private let onDuration: (Double) -> Void
 
+    /// 体の関節の信頼度の要約（診断ログ用）
+    var onJoints: ((String) -> Void)?
+
     init(device: MTLDevice?, onDuration: @escaping (Double) -> Void) {
         scaler = device.flatMap { GPUScaler(device: $0, width: 480, height: 270) }
         self.onDuration = onDuration
@@ -49,6 +52,7 @@ final class FaceDetector {
             try? sequenceHandler.perform(withBody ? [request, bodyRequest] : [request], on: input, orientation: .up)
             let found = (request.results ?? []).map(Self.face)
             let joints = withBody ? Self.body(bodyRequest.results?.first) : nil
+            if withBody { onJoints?(Self.summary(bodyRequest.results ?? [])) }
             let t1 = CACurrentMediaTime()
             lock.lock()
             faces = found
@@ -72,6 +76,18 @@ final class FaceDetector {
         lock.lock()
         defer { lock.unlock() }
         return CACurrentMediaTime() - resultTime <= maxAge ? body : nil
+    }
+
+    /// 例: "1人 lS.92 lE.40 lW.05 rS.90 rE.00 rW.00"
+    private static func summary(_ obs: [VNHumanBodyPoseObservation]) -> String {
+        guard let o = obs.first else { return "0人" }
+        let names: [(String, VNHumanBodyPoseObservation.JointName)] = [
+            ("lS", .leftShoulder), ("lE", .leftElbow), ("lW", .leftWrist),
+            ("rS", .rightShoulder), ("rE", .rightElbow), ("rW", .rightWrist),
+        ]
+        return "\(obs.count)人 " + names.map { label, j in
+            String(format: "%@%.2f", label, (try? o.recognizedPoint(j).confidence).map(Double.init) ?? 0)
+        }.joined(separator: " ")
     }
 
     /// 関節は本人から見た左右。信頼度の低い関節は nil にする（正規化座標・左上原点）

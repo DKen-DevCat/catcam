@@ -62,7 +62,11 @@ final class Pipeline {
     private var poser: AvatarPoser?
     private var avatarPose: AvatarPose?
     private var avatarSeen: CFTimeInterval = 0
-    private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
+    private lazy var faceDetector: FaceDetector = {
+        let d = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
+        d.onJoints = { [stats] s in stats.recordJoints(s) }
+        return d
+    }()
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
     private var systemFaces: [Rect] = []

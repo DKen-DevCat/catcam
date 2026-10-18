@@ -36,6 +36,41 @@ cat.select_set(True)
 # ミラーを適用して左右を別々に塗れるようにする
 bpy.ops.object.modifier_apply(modifier="Mirror")
 
+# ---- 尻尾: 背中から立ち上げて、正面から見ると頭の上に角のように突き出る形にする ----
+# 尻尾の骨を曲げて伸ばした姿勢を作り、それを新しい休止姿勢として焼き込む
+TAIL = [f"TailBase{'' if i == 0 else f'.{i:03d}'}" for i in range(6)]
+TAIL_DIRS = [(0, 1, -0.3), (0, 0.7, 0.7), (0, 0.2, 1), (0, 0, 1), (0, -0.1, 1), (0, -0.25, 1)]
+TAIL_STRETCH = 2.3
+for name in TAIL:
+    arm.data.bones[name].inherit_scale = "NONE"
+bpy.context.view_layer.update()
+tip = None
+for name, d in zip(TAIL, TAIL_DIRS):
+    pb = arm.pose.bones[name]
+    y = Vector(d).normalized()
+    x = Vector((1, 0, 0))
+    z = x.cross(y)
+    head = tip if tip is not None else pb.head.copy()
+    m = Matrix((x, y * TAIL_STRETCH, z)).transposed().to_4x4()
+    m.translation = head
+    pb.matrix = m
+    bpy.context.view_layer.update()
+    tip = pb.tail.copy()
+bpy.ops.object.modifier_apply(modifier="Armature")
+bpy.ops.object.select_all(action="DESELECT")
+arm.select_set(True)
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.mode_set(mode="POSE")
+bpy.ops.pose.armature_apply(selected=False)
+bpy.ops.object.mode_set(mode="OBJECT")
+for name in TAIL:
+    arm.data.bones[name].inherit_scale = "FULL"
+bpy.ops.object.select_all(action="DESELECT")
+cat.select_set(True)
+bpy.context.view_layer.objects.active = cat
+mod = cat.modifiers.new("Armature", "ARMATURE")
+mod.object = arm
+
 head_group = cat.vertex_groups["Head"].index
 
 
@@ -92,7 +127,6 @@ def flat_mat(name, color, rough=0.5):
 eye_mat = flat_mat("Eye", BLACK, 0.08)
 hl_mat = flat_mat("Highlight", (1, 1, 1), 0.3)
 white_mat = flat_mat("Muzzle", WHITE)
-horn_mat = flat_mat("Horn", PURPLE)
 
 uv_sphere = lambda location: bpy.ops.mesh.primitive_uv_sphere_add(segments=24, ring_count=12, radius=1, location=location)
 parts = []
@@ -145,8 +179,6 @@ def add_mouth():
 
 
 parts.append(add_mouth())
-parts.append(add_part("Horn", lambda location: bpy.ops.mesh.primitive_cone_add(vertices=16, radius1=1, depth=2, location=location),
-                      (0, 0.05, 2.05), (0.13, 0.13, 0.26), horn_mat, rot=(math.radians(-12), 0, 0)))
 
 # ---- 体の色（参考: ゲーム画面の毒チワワ） ----
 # 額の左右に、明るい紫のふちが付いた大きい緑の斑点。角の付け根のまわりに、ふちなしの小さい斑点
@@ -179,7 +211,7 @@ def body_color(p, n):
     if p.y < -0.3 and 0.9 < p.z < 1.32 and abs(p.x) < 0.4:
         return WHITE
     # 胸からお腹の前側は白
-    if -0.45 <= p.z < 0.98 and n.y < -0.35 and abs(p.x) < 0.62:
+    if -0.45 <= p.z < 0.98 and n.y < -0.35 and abs(p.x) < 0.62 and p.y < 0.3:
         return WHITE
     return PURPLE
 
