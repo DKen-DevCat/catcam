@@ -60,6 +60,7 @@ final class Pipeline {
     private var rigs: [CatFaceRig] = []
     // 以下 2 つは queue 上でのみ触る
     private var poser: AvatarPoser?
+    private var idle: AvatarIdle?
     private var avatarPose: AvatarPose?
     private var avatarSeen: CFTimeInterval = 0
     private lazy var faceDetector: FaceDetector = {
@@ -102,6 +103,7 @@ final class Pipeline {
     func setAvatarPoser(_ p: AvatarPoser?) {
         queue.async { [self] in
             poser = p
+            idle = p.map { AvatarIdle(skeleton: $0.skeleton) }
             avatarPose = nil
             faceDetector.bodyEnabled = p != nil
         }
@@ -147,7 +149,8 @@ final class Pipeline {
 
         lock.lock()
         current = Scene(pixelBuffer: pb, tracks: tracks, cats: catsEnabled ? cats : [:], faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,
-                        personMask: person?.mask, personMaskVersion: person?.version ?? 0, rigs: rigs, avatar: avatarPose)
+                        personMask: person?.mask, personMaskVersion: person?.version ?? 0, rigs: rigs,
+                        avatar: avatarPose.map { idle?.apply($0, time: t0) ?? $0 })
         lock.unlock()
     }
 

@@ -180,3 +180,25 @@ public struct AvatarPoser: Sendable {
         return AvatarPose(local: pose, origin: origin, scale: scale, mouthOpen: Float(face.mouthOpen))
     }
 }
+
+/// 人の動きが止まっていても生きて見えるよう、尻尾を左右にゆらし、呼吸で体を少し上下させる
+public struct AvatarIdle: Sendable {
+    /// 尻尾の骨（根元から先へ）
+    private let tail: [Int]
+
+    public init(skeleton: AvatarSkeleton) {
+        tail = skeleton.bones.indices.filter { skeleton.bones[$0].name.hasPrefix("TailBase") }
+    }
+
+    public func apply(_ pose: AvatarPose, time: Double) -> AvatarPose {
+        var p = pose
+        // 尻尾: 前後の軸（Y）まわりに少しずつ回し、先へ行くほど遅れて揺れる（しなる）
+        for (k, i) in tail.enumerated() {
+            let angle = Float(0.045 * sin(time * 2.4 - Double(k) * 0.6))
+            p.local[i] = p.local[i] * simd_quatf(angle: angle, axis: SIMD3(0, 1, 0))
+        }
+        // 呼吸: 約 4 秒周期で、大きさの 1.5% だけ上下する
+        p.origin.y += Float(sin(time * 1.6)) * pose.scale * 0.015
+        return p
+    }
+}

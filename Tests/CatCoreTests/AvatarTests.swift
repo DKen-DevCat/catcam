@@ -139,3 +139,44 @@ final class AvatarTests: XCTestCase {
         XCTAssertNil(poser().pose(face: nil, body: nil))
     }
 }
+
+final class AvatarIdleTests: XCTestCase {
+    /// 根元と、真上に立つ 2 本の尻尾
+    private let skeleton = AvatarSkeleton(bones: [
+        AvatarBone(name: "spine", parent: -1, head: SIMD3(0, 0, 0), tail: SIMD3(0, 0, 1)),
+        AvatarBone(name: "TailBase", parent: 0, head: SIMD3(0, 0.5, 0), tail: SIMD3(0, 0.5, 1)),
+        AvatarBone(name: "TailBase.001", parent: 1, head: SIMD3(0, 0.5, 1), tail: SIMD3(0, 0.5, 2)),
+    ])
+
+    private func pose() -> AvatarPose {
+        AvatarPose(local: skeleton.restPose, origin: SIMD2(100, 200), scale: 50, mouthOpen: 0)
+    }
+
+    private func tailTipX(_ p: AvatarPose) -> Float {
+        (skeleton.skinMatrices(local: p.local)[2] * SIMD4(0, 0.5, 2, 1)).x
+    }
+
+    func testTailSwaysLeftAndRight() {
+        let idle = AvatarIdle(skeleton: skeleton)
+        let xs = stride(from: 0.0, to: 4.0, by: 0.1).map { tailTipX(idle.apply(pose(), time: $0)) }
+        XCTAssertGreaterThan(xs.max()!, 0.05)
+        XCTAssertLessThan(xs.min()!, -0.05)
+        // 揺れは小さく（尻尾の長さ 2 に対して 0.6 以内）
+        XCTAssertLessThan(xs.map(abs).max()!, 0.6)
+    }
+
+    func testBreathingBobsSlightly() {
+        let idle = AvatarIdle(skeleton: skeleton)
+        let ys = stride(from: 0.0, to: 4.0, by: 0.1).map { idle.apply(pose(), time: $0).origin.y }
+        XCTAssertGreaterThan(ys.max()! - ys.min()!, 0.2)
+        // 大きさの 2% 以内
+        XCTAssertLessThan(ys.map { abs($0 - 200) }.max()!, 50 * 0.02 + 1e-3)
+    }
+
+    func testKeepsTrackedRotationsOfOtherBones() {
+        let idle = AvatarIdle(skeleton: skeleton)
+        var p = pose()
+        p.local[0] = simd_quatf(angle: 0.3, axis: SIMD3(0, 0, 1))
+        XCTAssertEqual(idle.apply(p, time: 1.3).local[0], p.local[0])
+    }
+}
