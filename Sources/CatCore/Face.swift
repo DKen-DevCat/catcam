@@ -2,10 +2,13 @@
 public struct Face: Equatable, Sendable {
     public var rect: Rect
     public var parts: [Rect]
+    /// 猫の顔を組み立てるための点列（正規化座標）。取れない検出器では nil
+    public var landmarks: FaceLandmarks?
 
-    public init(rect: Rect, parts: [Rect]) {
+    public init(rect: Rect, parts: [Rect], landmarks: FaceLandmarks? = nil) {
         self.rect = rect
         self.parts = parts
+        self.landmarks = landmarks
     }
 }
 
@@ -51,7 +54,7 @@ public final class FaceSmoother {
             let parts = prev.parts.count == f.parts.count
                 ? zip(prev.parts, f.parts).map { $0.lerp(to: $1, t: smoothing) }
                 : f.parts
-            return Face(rect: prev.rect.lerp(to: f.rect, t: smoothing), parts: parts)
+            return Face(rect: prev.rect.lerp(to: f.rect, t: smoothing), parts: parts, landmarks: f.landmarks)
         }
         previous = out
         return out

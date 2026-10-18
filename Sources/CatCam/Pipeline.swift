@@ -19,6 +19,8 @@ struct Scene {
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
     var personMaskVersion = 0
+    /// 猫フィルタで顔に描く猫のパーツの配置（カメラのピクセル座標）
+    var rigs: [CatFaceRig] = []
 }
 
 /// カメラフレームごとに 縮小 → 動き検出 → 追跡 を行い、最新の Scene を公開する
@@ -52,6 +54,8 @@ final class Pipeline {
     private var catMatcher: CatMatcher?
     private var catsEnabled = true
     private var cats: [Int: CatMatcher.Match] = [:]
+    /// queue 上でのみ触る。前フレームの配置へ寄せて、15Hz の検出を 30fps で滑らかにつなぐ
+    private var rigs: [CatFaceRig] = []
     private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
@@ -103,6 +107,10 @@ final class Pipeline {
         motion.config.maxBlobHeight = maxWindow
         let gray = downsampler.gray(pb)
         let faces = faceSmoother.update(currentFaces(pb, now: t0))
+        let size = (w: Double(CVPixelBufferGetWidth(pb)), h: Double(CVPixelBufferGetHeight(pb)))
+        rigs = CatFaceRig.smooth(previous: rigs,
+                                 current: faces.compactMap { $0.landmarks.flatMap { CatFaceRig($0.scaled(width: size.w, height: size.h)) } },
+                                 t: 0.6)
         var person: PersonSegmenter.Result?
         if personEnabled {
             person = segmenter.latest(maxAge: 0.5)
@@ -119,7 +127,7 @@ final class Pipeline {
 
         lock.lock()
         current = Scene(pixelBuffer: pb, tracks: tracks, cats: catsEnabled ? cats : [:], faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,
-                        personMask: person?.mask, personMaskVersion: person?.version ?? 0)
+                        personMask: person?.mask, personMaskVersion: person?.version ?? 0, rigs: rigs)
         lock.unlock()
     }
 

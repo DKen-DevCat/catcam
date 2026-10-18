@@ -8,7 +8,8 @@ import Vision
 /// Vision の顔ランドマーク検出を専用キューで間引きながら回す。処理中に来たフレームは捨てる。
 /// Vision の CPU コストの大半は入力の前処理なので、GPU で縮小してから渡す
 final class FaceDetector {
-    var minInterval: CFTimeInterval = 1.0 / 10
+    // 猫の顔パーツを顔に追従させるため 15Hz（10Hz だと動いた時に遅れが見える）
+    var minInterval: CFTimeInterval = 1.0 / 15
     private let queue = DispatchQueue(label: "catcam.face", qos: .userInitiated)
     // 毎回作るとリビジョン解決などの初期化コストが乗るので使い回す（queue 上でのみ触る）
     private let request = VNDetectFaceLandmarksRequest()
@@ -62,6 +63,14 @@ final class FaceDetector {
     /// Vision は左下原点で、ランドマークは顔の枠に対する相対座標。左上原点の画像座標に直す
     private static func face(_ o: VNFaceObservation) -> Face {
         let b = o.boundingBox
+        func points(_ region: VNFaceLandmarkRegion2D?) -> [Vec2] {
+            (region?.normalizedPoints ?? []).map { p in
+                Vec2(Double(b.minX + p.x * b.width), Double(1 - (b.minY + p.y * b.height)))
+            }
+        }
+        let lm = o.landmarks
+        let landmarks = FaceLandmarks(leftEye: points(lm?.leftEye), rightEye: points(lm?.rightEye), nose: points(lm?.nose),
+                                      outerLips: points(lm?.outerLips), innerLips: points(lm?.innerLips))
         let parts = [o.landmarks?.leftEye, o.landmarks?.rightEye, o.landmarks?.nose, o.landmarks?.outerLips]
             .compactMap { region -> Rect? in
                 guard let region else { return nil }
@@ -70,7 +79,7 @@ final class FaceDetector {
                 }
                 return Rect.bounding(points)?.padded(0.35).withMinAspect(0.6)
             }
-        return Face(rect: Rect(x: b.minX, y: 1 - b.maxY, w: b.width, h: b.height), parts: parts)
+        return Face(rect: Rect(x: b.minX, y: 1 - b.maxY, w: b.width, h: b.height), parts: parts, landmarks: landmarks)
     }
 }
 
