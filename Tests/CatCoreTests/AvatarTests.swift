@@ -352,6 +352,25 @@ final class AvatarFingerTests: XCTestCase {
         XCTAssertEqual(wrist.y, 300, accuracy: 0.5)
     }
 
+    func testFingerSegmentsTakeHumanLengths() throws {
+        let s = skeleton()
+        let p = AvatarPoser(skeleton: s, eyeCenter: SIMD3(0, -0.5, 1.4), eyeDistance: 0.7, headScale: 0.7)
+        // scale = 100px / モデル 1。人差し指の各節は人で 30px（モデルでは 0.1 = 10px）なので 3 倍に伸ばす
+        var hand = [Vec2?](repeating: nil, count: HandJoint.count)
+        hand[HandJoint.wrist] = Vec2(600, 400)
+        hand[HandJoint.middle] = Vec2(600, 340)
+        for k in 0...3 { hand[HandJoint.index + k] = Vec2(600, 340 - Double(k) * 30) }
+        var body = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: Vec2(600, 400),
+                              rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        body.leftHand = hand
+        let out = try XCTUnwrap(p.pose(face: face(), body: body))
+        for k in 1...3 {
+            XCTAssertEqual(out.stretch[s.index(of: "index.\(k).L")!], 3, accuracy: 1e-3)
+        }
+        // 手の骨は、手首 → 中指の付け根（人 60px）に合わせる。モデルの手首 → 指の付け根は 0.3 くらい
+        XCTAssertGreaterThan(out.stretch[s.index(of: "hand.L")!], 1.5)
+    }
+
     func testScaledScalesHandPoints() {
         var b = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: nil, rightShoulder: nil, rightElbow: nil, rightWrist: nil)
         var h = [Vec2?](repeating: nil, count: HandJoint.count)

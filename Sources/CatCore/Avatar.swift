@@ -250,23 +250,32 @@ public struct AvatarPoser: Sendable {
         return out
     }
 
-    /// 手の骨は手首 → 中指の付け根の向きに、指の各節は検出した隣り合う 2 点の向きにする。
+    /// 手の骨は手首 → 中指の付け根の向きと長さに、指の各節は検出した隣り合う 2 点の向きと長さにする。
     /// 取れていない点にかかる節は親の向きのまま（まっすぐ）にする
     private func fingers(_ out: inout AvatarPose, side: String, hand: [Vec2?]) {
         func dir(_ a: Vec2?, _ b: Vec2?) -> SIMD2<Float>? {
             guard let a, let b else { return nil }
             return SIMD2(Float(b.x - a.x), Float(-(b.y - a.y)))
         }
-        if let i = skeleton.index(of: "hand.\(side)"), let d = dir(hand[HandJoint.wrist], hand[HandJoint.middle]) {
+        // 長さも人に合わせる（画像上の長さ ÷ モデルでの長さ）。モデルの手の大きさのままだと指先がずれる
+        func fit(_ i: Int, _ d: SIMD2<Float>, modelLength: Float) {
             skeleton.point(&out.local, bone: i, toward: d)
+            out.stretch[i] = min(max(simd_length(d) / out.scale / modelLength, 0.2), 5)
+        }
+        let bones = skeleton.bones
+        if let i = skeleton.index(of: "hand.\(side)"), let d = dir(hand[HandJoint.wrist], hand[HandJoint.middle]) {
+            // 手の骨の長さは、手首から中指の付け根まで
+            let base = skeleton.index(of: "middle.1.\(side)").map { bones[$0].head } ?? bones[i].tail
+            fit(i, d, modelLength: simd_length(base - bones[i].head))
         }
         for (name, start) in HandJoint.fingers {
             for k in 1...3 {
                 guard let i = skeleton.index(of: "\(name).\(k).\(side)") else { continue }
                 if let d = dir(hand[start + k - 1], hand[start + k]) {
-                    skeleton.point(&out.local, bone: i, toward: d)
+                    fit(i, d, modelLength: simd_length(bones[i].tail - bones[i].head))
                 } else {
                     out.local[i] = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+                    out.stretch[i] = 1
                 }
             }
         }
