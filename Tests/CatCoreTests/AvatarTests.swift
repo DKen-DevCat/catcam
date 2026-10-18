@@ -117,6 +117,14 @@ final class AvatarTests: XCTestCase {
         XCTAssertGreaterThan(nose.x, 0.1)
     }
 
+    func testRotatedHeadStillPutsEyesOnFace() throws {
+        let p = poser()
+        let f = face(roll: 0.2, noseShift: 25)
+        let out = try XCTUnwrap(p.pose(face: f, body: nil))
+        let eye = try XCTUnwrap(p.debugJoints(pose: out, face: f, body: nil).first { $0.name == "目" })
+        XCTAssertLessThan(try XCTUnwrap(eye.error), 0.5)
+    }
+
     func testArmsFollowBodyJoints() throws {
         let p = poser()
         // 人の左腕（画像の右側）: 肩 (600,450) → 肘 (600,550) 真下 → 手首 (700,550) 右
@@ -369,6 +377,45 @@ final class AvatarFingerTests: XCTestCase {
         }
         // 手の骨は、手首 → 中指の付け根（人 60px）に合わせる。モデルの手首 → 指の付け根は 0.3 くらい
         XCTAssertGreaterThan(out.stretch[s.index(of: "hand.L")!], 1.5)
+    }
+
+    func testFingerBaseMovesToDetectedKnuckle() throws {
+        let s = skeleton()
+        let p = AvatarPoser(skeleton: s, eyeCenter: SIMD3(0, -0.5, 1.4), eyeDistance: 0.7, headScale: 0.7)
+        // 人差し指の付け根を、中指の付け根から大きく横にずらす。指先までの 4 点がすべて人の位置に重なる
+        var hand = [Vec2?](repeating: nil, count: HandJoint.count)
+        hand[HandJoint.wrist] = Vec2(600, 400)
+        hand[HandJoint.middle] = Vec2(600, 340)
+        for k in 0...3 { hand[HandJoint.index + k] = Vec2(560 - Double(k) * 10, 345 - Double(k) * 25) }
+        var body = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: Vec2(600, 400),
+                              rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        body.leftHand = hand
+        let out = try XCTUnwrap(p.pose(face: face(), body: body))
+        let m = s.skinMatrices(local: out.local, stretch: out.stretch, offsets: out.offsets)
+        for k in 1...3 {
+            let i = s.index(of: "index.\(k).L")!
+            let h = m[i] * SIMD4(s.bones[i].head, 1), t = m[i] * SIMD4(s.bones[i].tail, 1)
+            let hp = out.project(SIMD3(h.x, h.y, h.z)), tp = out.project(SIMD3(t.x, t.y, t.z))
+            XCTAssertLessThan(simd_length(hp - SIMD2(Float(hand[HandJoint.index + k - 1]!.x), Float(hand[HandJoint.index + k - 1]!.y))), 0.5)
+            XCTAssertLessThan(simd_length(tp - SIMD2(Float(hand[HandJoint.index + k]!.x), Float(hand[HandJoint.index + k]!.y))), 0.5)
+        }
+    }
+
+    func testDetectedHandComesInFrontOfFace() throws {
+        let s = skeleton()
+        let p = AvatarPoser(skeleton: s, eyeCenter: SIMD3(0, -0.5, 1.4), eyeDistance: 0.7, headScale: 0.7)
+        var hand = [Vec2?](repeating: nil, count: HandJoint.count)
+        hand[HandJoint.wrist] = Vec2(500, 330)
+        hand[HandJoint.middle] = Vec2(500, 280)
+        var body = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: Vec2(500, 330),
+                              rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        body.leftHand = hand
+        let out = try XCTUnwrap(p.pose(face: face(), body: body))
+        let heads = s.posedHeads(local: out.local, stretch: out.stretch, offsets: out.offsets)
+        // 顔の一番手前（鼻先 -0.8 くらい）より手前（Y がより小さい）に手が来る
+        XCTAssertLessThan(heads[s.index(of: "hand.L")!].y, -1.0)
+        XCTAssertLessThan(heads[s.index(of: "index.1.L")!].y, -1.0)
+        // 取れていない右腕は動かさない（右腕の骨はこの骨組みにないので左だけ確認）
     }
 
     func testScaledScalesHandPoints() {
