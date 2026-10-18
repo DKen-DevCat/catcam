@@ -7,11 +7,12 @@ from mathutils import Vector, Matrix
 OUT = sys.argv[sys.argv.index("--") + 1] if "--" in sys.argv else "models/out"
 os.makedirs(OUT, exist_ok=True)
 
-PURPLE = (0.36, 0.13, 0.52)
-RIM = (0.62, 0.40, 0.78)
-GREEN = (0.04, 0.38, 0.10)
-WHITE = (0.92, 0.90, 0.95)
-GRAY = (0.55, 0.55, 0.58)
+# 色はリニア値（参考画像の sRGB を換算）
+PURPLE = (0.30, 0.04, 0.40)
+GREEN = (0.05, 0.36, 0.08)
+GREEN_RIM = (0.01, 0.10, 0.02)
+WHITE = (0.86, 0.85, 0.88)
+EAR_INNER = (0.86, 0.70, 0.78)
 BLACK = (0.01, 0.01, 0.012)
 
 cat = bpy.data.objects["Cat"]
@@ -102,39 +103,31 @@ parts.append(add_part("Horn", lambda location: bpy.ops.mesh.primitive_cone_add(v
                       (0, 0.05, 2.05), (0.13, 0.13, 0.26), horn_mat, rot=(math.radians(-12), 0, 0)))
 
 # ---- 体の色: 紫に緑の斑点、白い靴下・鼻先、灰色の耳の内側、白い眉 ----
-random.seed(7)
-spots = []
-while len(spots) < 26:
-    v = random.choice(me.vertices)
-    p = v.co.copy()
-    # 顔の正面と耳には置かない
-    if p.z > 1.0 and p.y < -0.3:
-        continue
-    if abs(p.x) > 0.75 and p.z > 1.5:
-        continue
-    if all((p - q).length > 0.42 for q, _ in spots):
-        spots.append((p, random.uniform(0.11, 0.17)))
-# 頭の上の斑点（毒チワワは額にもある）
-spots += [(Vector((0.42, -0.38, 1.72)), 0.1), (Vector((-0.5, -0.3, 1.66)), 0.1), (Vector((0.1, -0.2, 1.84)), 0.09)]
-brows = [Vector((0.26 * s, -0.6, 1.63)) for s in (1, -1)]
+# 斑点は頭の上だけ（参考画像に合わせる）
+spots = [(Vector((0, -0.3, 1.8)), 0.12)]
+spots += [(Vector((0.36 * s, -0.12, 1.8)), 0.11) for s in (1, -1)]
+spots += [(Vector((0.66 * s, 0.05, 1.62)), 0.09) for s in (1, -1)]
 
 
 def body_color(p, n):
-    if p.z < -0.78:
+    # 足・手先は白
+    if (p.z < -0.45 and p.y < 0.6) or (abs(p.x) > 1.12 and p.z < 1.0):
         return WHITE
+    # 耳の内側は白っぽいピンク
     if abs(p.x) > 0.78 and p.z > 1.45 and n.y < -0.2:
-        return GRAY
-    if p.z < 1.28 and p.z > 0.95 and p.y < -0.4 and abs(p.x) < 0.38:
+        return EAR_INNER
+    # 顔の下半分（目より下）は白
+    if p.y < -0.3 and 0.9 < p.z < 1.36 and abs(p.x) < 0.62:
         return WHITE
-    for b in brows:
-        if (p - b).length < 0.085:
-            return WHITE
+    # 胸からお腹の前側は白
+    if -0.45 <= p.z < 0.98 and n.y < -0.35 and abs(p.x) < 0.62:
+        return WHITE
     for c, r in spots:
         d = (p - c).length
         if d < r:
             return GREEN
         if d < r * 1.3:
-            return RIM
+            return GREEN_RIM
     return PURPLE
 
 
