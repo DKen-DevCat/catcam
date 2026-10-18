@@ -98,13 +98,49 @@ for s in (1, -1):
     # 横長の楕円にして、丸い目の可愛さを抑える
     parts.append(add_part(f"Eye.{s}", uv_sphere, (0.37 * s, -0.52, 1.42), (0.22, 0.15, 0.125), eye_mat))
     parts.append(add_part(f"Highlight.{s}", uv_sphere, (0.31 * s, -0.66, 1.46), (0.035, 0.025, 0.028), hl_mat))
-parts.append(add_part("Muzzle", uv_sphere, (0, -0.58, 1.17), (0.27, 0.17, 0.17), white_mat))
-parts.append(add_part("Nose", uv_sphere, (0, -0.74, 1.24), (0.09, 0.06, 0.065), eye_mat))
-# 口はいつも開けておく（黒い口に小さい牙 2 本）
-parts.append(add_part("Mouth", uv_sphere, (0, -0.69, 1.08), (0.14, 0.06, 0.055), eye_mat))
-for s in (1, -1):
-    parts.append(add_part(f"Fang.{s}", lambda location: bpy.ops.mesh.primitive_cone_add(vertices=8, radius1=1, depth=2, location=location),
-                          (0.065 * s, -0.735, 1.1), (0.022, 0.022, 0.032), white_mat, rot=(math.pi, 0, 0)))
+MUZ_C, MUZ_R = Vector((0, -0.57, 1.14)), Vector((0.33, 0.2, 0.21))
+parts.append(add_part("Muzzle", uv_sphere, tuple(MUZ_C), tuple(MUZ_R), white_mat))
+parts.append(add_part("Nose", uv_sphere, (0, -0.76, 1.25), (0.11, 0.06, 0.05), eye_mat))
+# 口はいつも開けておく。参考画像の、鼻先いっぱいに広がる黒い三日月形の笑い口
+
+
+def on_muzzle(x, z, lift):
+    """鼻先の楕円体の正面の表面上の点（少し浮かせる）"""
+    k = 1 - (x / MUZ_R.x) ** 2 - ((z - MUZ_C.z) / MUZ_R.z) ** 2
+    y = MUZ_C.y - MUZ_R.y * math.sqrt(max(k, 0.0))
+    return Vector((x, y - lift, z))
+
+
+def add_mouth():
+    w, n = 0.29, 28
+    top, bottom = [], []
+    for i in range(n + 1):
+        u = -w + 2 * w * i / n
+        t = (u / w) ** 2
+        # 上の縁は中央だけ白い上唇が垂れ下がる。両端で上下の縁が近づいて細くなる
+        up = 1.12 + 0.06 * t - 0.035 * math.exp(-(u / 0.055) ** 2)
+        lo = 1.0 + 0.15 * t
+        top.append(on_muzzle(u, up, 0.012))
+        bottom.append(on_muzzle(u, min(lo, up - 0.012), 0.012))
+    verts = top + bottom
+    faces = [(i, i + 1, n + 2 + i, n + 1 + i) for i in range(n)]
+    me = bpy.data.meshes.new("Mouth")
+    me.from_pydata([tuple(v) for v in verts], [], faces)
+    o = bpy.data.objects.new("Mouth", me)
+    bpy.context.collection.objects.link(o)
+    bpy.ops.object.select_all(action="DESELECT")
+    o.select_set(True)
+    bpy.context.view_layer.objects.active = o
+    sol = o.modifiers.new("Solid", "SOLIDIFY")
+    sol.thickness = 0.02
+    bpy.ops.object.modifier_apply(modifier="Solid")
+    o.data.materials.append(eye_mat)
+    vg = o.vertex_groups.new(name="Head")
+    vg.add(list(range(len(o.data.vertices))), 1.0, "REPLACE")
+    return o
+
+
+parts.append(add_mouth())
 parts.append(add_part("Horn", lambda location: bpy.ops.mesh.primitive_cone_add(vertices=16, radius1=1, depth=2, location=location),
                       (0, 0.05, 2.05), (0.13, 0.13, 0.26), horn_mat, rot=(math.radians(-12), 0, 0)))
 
