@@ -84,10 +84,29 @@ public struct AvatarSkeleton: Sendable {
     }
 }
 
+/// 手の 21 点の並び（Vision の手の関節と同じ）。各指は付け根 → 第 2 関節 → 第 1 関節 → 指先の 4 点
+public enum HandJoint {
+    public static let wrist = 0
+    /// 親指は CMC → MP → IP → 指先
+    public static let thumb = 1
+    public static let index = 5
+    public static let middle = 9
+    public static let ring = 13
+    public static let little = 17
+    public static let count = 21
+    /// モデルの骨の名前と、その指の 4 点の先頭
+    public static let fingers: [(name: String, start: Int)] = [
+        ("thumb", thumb), ("index", index), ("middle", middle), ("ring", ring), ("little", little),
+    ]
+}
+
 /// 人の体の関節（画像のピクセル座標・y 下向き）。left は本人の左（左右反転前の画像では右側に写る）
 public struct BodyJoints: Equatable, Sendable {
     public var leftShoulder, leftElbow, leftWrist: Vec2?
     public var rightShoulder, rightElbow, rightWrist: Vec2?
+    /// 手の 21 点（`HandJoint` の並び）。取れなかった点は nil
+    public var leftHand: [Vec2?]?
+    public var rightHand: [Vec2?]?
 
     public init(leftShoulder: Vec2?, leftElbow: Vec2?, leftWrist: Vec2?,
                 rightShoulder: Vec2?, rightElbow: Vec2?, rightWrist: Vec2?) {
@@ -101,8 +120,11 @@ public struct BodyJoints: Equatable, Sendable {
 
     public func scaled(width: Double, height: Double) -> BodyJoints {
         func s(_ p: Vec2?) -> Vec2? { p.map { Vec2($0.x * width, $0.y * height) } }
-        return BodyJoints(leftShoulder: s(leftShoulder), leftElbow: s(leftElbow), leftWrist: s(leftWrist),
-                          rightShoulder: s(rightShoulder), rightElbow: s(rightElbow), rightWrist: s(rightWrist))
+        var r = BodyJoints(leftShoulder: s(leftShoulder), leftElbow: s(leftElbow), leftWrist: s(leftWrist),
+                           rightShoulder: s(rightShoulder), rightElbow: s(rightElbow), rightWrist: s(rightWrist))
+        r.leftHand = leftHand?.map(s)
+        r.rightHand = rightHand?.map(s)
+        return r
     }
 }
 
@@ -200,8 +222,9 @@ public struct AvatarPoser: Sendable {
 
         // 腕: 肘まで取れていれば向きをそのまま写す。手首だけなら、手首に前腕の先が来るよう肘の曲げを逆算する。
         // どちらもなければ下ろしておく
-        for (side, shoulder, elbow, wrist) in [("L", body?.leftShoulder, body?.leftElbow, body?.leftWrist),
-                                               ("R", body?.rightShoulder, body?.rightElbow, body?.rightWrist)] {
+        for (side, shoulder, elbow, wrist, hand) in [("L", body?.leftShoulder, body?.leftElbow, body?.leftWrist, body?.leftHand),
+                                                     ("R", body?.rightShoulder, body?.rightElbow, body?.rightWrist, body?.rightHand)] {
+            defer { if let hand { fingers(&out, side: side, hand: hand) } }
             guard let upper = skeleton.index(of: "upper_arm.\(side)"), let fore = skeleton.index(of: "forearm.\(side)") else { continue }
             let outward: Float = side == "L" ? 1 : -1
             func dir(_ a: Vec2, _ b: Vec2) -> SIMD2<Float> { SIMD2(Float(b.x - a.x), Float(-(b.y - a.y))) }
@@ -216,6 +239,28 @@ public struct AvatarPoser: Sendable {
             }
         }
         return out
+    }
+
+    /// 手の骨は手首 → 中指の付け根の向きに、指の各節は検出した隣り合う 2 点の向きにする。
+    /// 取れていない点にかかる節は親の向きのまま（まっすぐ）にする
+    private func fingers(_ out: inout AvatarPose, side: String, hand: [Vec2?]) {
+        func dir(_ a: Vec2?, _ b: Vec2?) -> SIMD2<Float>? {
+            guard let a, let b else { return nil }
+            return SIMD2(Float(b.x - a.x), Float(-(b.y - a.y)))
+        }
+        if let i = skeleton.index(of: "hand.\(side)"), let d = dir(hand[HandJoint.wrist], hand[HandJoint.middle]) {
+            skeleton.point(&out.local, bone: i, toward: d)
+        }
+        for (name, start) in HandJoint.fingers {
+            for k in 1...3 {
+                guard let i = skeleton.index(of: "\(name).\(k).\(side)") else { continue }
+                if let d = dir(hand[start + k - 1], hand[start + k]) {
+                    skeleton.point(&out.local, bone: i, toward: d)
+                } else {
+                    out.local[i] = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+                }
+            }
+        }
     }
 
     /// 上腕と前腕の 2 本で、前腕の先を `target`（モデルの XZ 平面）に届かせる。肘は下向きに曲げる。

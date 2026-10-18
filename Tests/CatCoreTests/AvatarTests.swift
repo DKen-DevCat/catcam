@@ -260,3 +260,79 @@ final class AvatarReachTests: XCTestCase {
         XCTAssertGreaterThan(elbow.y, shoulder.y + (330 - shoulder.y) * t)
     }
 }
+
+final class AvatarFingerTests: XCTestCase {
+    /// 腕 2 本 + 手 + 人差し指 3 節 + 親指 3 節（左手だけ）
+    private func skeleton() -> AvatarSkeleton {
+        var b = [
+            AvatarBone(name: "spine", parent: -1, head: SIMD3(0, 0, 0), tail: SIMD3(0, 0, 0.8)),
+            AvatarBone(name: "Head", parent: 0, head: SIMD3(0, 0, 0.9), tail: SIMD3(0, 0, 1.8)),
+            AvatarBone(name: "upper_arm.L", parent: 0, head: SIMD3(0.4, 0, 0.6), tail: SIMD3(0.9, 0, 0.6)),
+            AvatarBone(name: "forearm.L", parent: 2, head: SIMD3(0.9, 0, 0.6), tail: SIMD3(1.3, 0, 0.6)),
+            AvatarBone(name: "hand.L", parent: 3, head: SIMD3(1.3, 0, 0.6), tail: SIMD3(1.5, 0, 0.6)),
+        ]
+        var parent = 4
+        for k in 1...3 {
+            let x = 1.6 + Float(k - 1) * 0.1
+            b.append(AvatarBone(name: "index.\(k).L", parent: parent, head: SIMD3(x, 0, 0.65), tail: SIMD3(x + 0.1, 0, 0.65)))
+            parent = b.count - 1
+        }
+        parent = 4
+        for k in 1...3 {
+            let z = 0.65 + Float(k - 1) * 0.08
+            b.append(AvatarBone(name: "thumb.\(k).L", parent: parent, head: SIMD3(1.4, 0, z), tail: SIMD3(1.45, 0, z + 0.08)))
+            parent = b.count - 1
+        }
+        return AvatarSkeleton(bones: b)
+    }
+
+    private func face() -> CatFaceRig {
+        CatFaceRig(FaceLandmarks(
+            leftEye: [Vec2(430, 300), Vec2(470, 300), Vec2(450, 296), Vec2(450, 304)],
+            rightEye: [Vec2(530, 300), Vec2(570, 300), Vec2(550, 296), Vec2(550, 304)],
+            nose: [Vec2(500, 330), Vec2(500, 365)],
+            outerLips: [Vec2(470, 400), Vec2(530, 400)], innerLips: [Vec2(480, 400), Vec2(520, 400)]))!
+    }
+
+    private func direction(_ s: AvatarSkeleton, _ out: AvatarPose, _ name: String) -> SIMD3<Float> {
+        let i = s.index(of: name)!
+        let m = s.skinMatrices(local: out.local, stretch: out.stretch)[i]
+        let h = m * SIMD4(s.bones[i].head, 1), t = m * SIMD4(s.bones[i].tail, 1)
+        return simd_normalize(SIMD3(t.x - h.x, t.y - h.y, t.z - h.z))
+    }
+
+    func testFingerBonesFollowHandPoints() throws {
+        let s = skeleton()
+        let p = AvatarPoser(skeleton: s, eyeCenter: SIMD3(0, -0.5, 1.4), eyeDistance: 0.7, headScale: 0.7)
+        // 手首 (600,400)。中指の付け根は真上 → 手の骨は上向き。人差し指は付け根から右へ、2 節目から下へ曲がる
+        var hand = [Vec2?](repeating: nil, count: HandJoint.count)
+        hand[HandJoint.wrist] = Vec2(600, 400)
+        hand[HandJoint.middle] = Vec2(600, 350)
+        hand[HandJoint.index] = Vec2(590, 350)
+        hand[HandJoint.index + 1] = Vec2(610, 350)
+        hand[HandJoint.index + 2] = Vec2(610, 370)
+        hand[HandJoint.index + 3] = Vec2(610, 390)
+        // 親指は 1 節目だけ取れていて、左上へ
+        hand[HandJoint.thumb] = Vec2(590, 380)
+        hand[HandJoint.thumb + 1] = Vec2(580, 370)
+        var body = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: Vec2(600, 400),
+                              rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        body.leftHand = hand
+        let out = try XCTUnwrap(p.pose(face: face(), body: body))
+        XCTAssertLessThan(simd_length(direction(s, out, "hand.L") - SIMD3(0, 0, 1)), 1e-3)
+        XCTAssertLessThan(simd_length(direction(s, out, "index.1.L") - SIMD3(1, 0, 0)), 1e-3)
+        XCTAssertLessThan(simd_length(direction(s, out, "index.2.L") - SIMD3(0, 0, -1)), 1e-3)
+        XCTAssertLessThan(simd_length(direction(s, out, "index.3.L") - SIMD3(0, 0, -1)), 1e-3)
+        XCTAssertLessThan(simd_length(direction(s, out, "thumb.1.L") - simd_normalize(SIMD3(-1, 0, 1))), 1e-3)
+        // 取れていない親指の 2 節目は 1 節目と同じ向きのまま（休止姿勢のまっすぐ）
+        XCTAssertLessThan(simd_length(direction(s, out, "thumb.2.L") - direction(s, out, "thumb.1.L")), 1e-3)
+    }
+
+    func testScaledScalesHandPoints() {
+        var b = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: nil, rightShoulder: nil, rightElbow: nil, rightWrist: nil)
+        var h = [Vec2?](repeating: nil, count: HandJoint.count)
+        h[0] = Vec2(0.5, 0.5)
+        b.rightHand = h
+        XCTAssertEqual(b.scaled(width: 100, height: 10).rightHand?[0], Vec2(50, 5))
+    }
+}

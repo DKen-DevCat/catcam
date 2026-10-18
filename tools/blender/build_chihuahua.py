@@ -100,7 +100,7 @@ bpy.ops.object.modifier_apply(modifier="Sub")
 
 
 # ---- 頭に付けるパーツ（目・鼻・鼻先・角）。Head ボーンにだけ追従させる ----
-def add_part(name, mesh_op, loc, scale, mat, rot=(0, 0, 0)):
+def add_part(name, mesh_op, loc, scale, mat, rot=(0, 0, 0), bone="Head"):
     mesh_op(location=loc)
     o = bpy.context.active_object
     o.name = name
@@ -108,7 +108,7 @@ def add_part(name, mesh_op, loc, scale, mat, rot=(0, 0, 0)):
     o.rotation_euler = rot
     bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
     o.data.materials.append(mat)
-    vg = o.vertex_groups.new(name="Head")
+    vg = o.vertex_groups.new(name=bone)
     vg.add(list(range(len(o.data.vertices))), 1.0, "REPLACE")
     bpy.ops.object.shade_smooth()
     return o
@@ -179,6 +179,74 @@ def add_mouth():
 
 
 parts.append(add_mouth())
+
+# ---- 手: 前足を外して、人と同じ 5 本指の手に付け替える ----
+# 手のひらはカメラ（-Y）に向け、指は腕の先へ（左手は +X）伸ばし、親指を上にする。
+# 指は 1 本 3 節で、節ごとに骨を 1 本ずつ入れる（節の形はその骨にだけ追従する）
+FINGERS = {
+    # 名前: (付け根の高さ Z, 3 節の長さ, 太さ)
+    "index": (0.055, (0.075, 0.05, 0.04), 0.02),
+    "middle": (0.018, (0.085, 0.055, 0.042), 0.021),
+    "ring": (-0.02, (0.078, 0.05, 0.04), 0.02),
+    "little": (-0.055, (0.06, 0.04, 0.033), 0.017),
+}
+THUMB = ((0.06, 0.045, 0.04), 0.023)
+# 上の寸法は人の手の比率。モデルは頭でっかちで腕が太いので、全体をこの倍率で大きくする
+HAND_SCALE = 2.0
+
+# 元の前足の頂点を消す
+bm = bmesh.new()
+bm.from_mesh(me)
+deform = bm.verts.layers.deform.verify()
+hand_groups = {cat.vertex_groups[f"hand.{x}"].index for x in ("L", "R")}
+bmesh.ops.delete(bm, geom=[v for v in bm.verts if any(v[deform].get(g, 0) > 0.5 for g in hand_groups)], context="VERTS")
+# 切り口の穴をふさぐ
+bmesh.ops.holes_fill(bm, edges=bm.edges[:], sides=0)
+bm.to_mesh(me)
+bm.free()
+
+hand_chains = []  # (骨の名前, 根元, 先, 親の骨の名前)
+for side, sx in (("L", 1), ("R", -1)):
+    wrist = arm.data.bones[f"hand.{side}"].head_local.copy()
+    k = HAND_SCALE
+    # 手のひらは角の丸い板（立方体の角を面取りする）
+    palm = add_part(f"Palm.{side}", lambda location: bpy.ops.mesh.primitive_cube_add(size=2, location=location),
+                    wrist + Vector((0.08 * sx, 0, 0)) * k, (0.095 * k, 0.04 * k, 0.08 * k), white_mat, bone=f"hand.{side}")
+    rnd = palm.modifiers.new("Round", "BEVEL")
+    rnd.width = 0.03 * k
+    rnd.segments = 4
+    bpy.context.view_layer.objects.active = palm
+    bpy.ops.object.modifier_apply(modifier="Round")
+    parts.append(palm)
+    chains = {name: (wrist + Vector((0.165 * sx, 0, z)) * 1 + Vector((0.165 * sx, 0, z)) * (k - 1), Vector((sx, 0, 0)),
+                     [ln * k for ln in lens], r * k)
+              for name, (z, lens, r) in FINGERS.items()}
+    chains["thumb"] = (wrist + Vector((0.06 * sx, -0.01, 0.06)) * k, Vector((0.6 * sx, 0, 0.8)).normalized(),
+                       [ln * k for ln in THUMB[0]], THUMB[1] * k)
+    for name, (start, d, lens, r) in chains.items():
+        parent, p0 = f"hand.{side}", start
+        for k, ln in enumerate(lens, 1):
+            p1 = p0 + d * ln
+            bone = f"{name}.{k}.{side}"
+            hand_chains.append((bone, p0.copy(), p1.copy(), parent))
+            # 節は少し長めの楕円体にして、関節で隣と重ねる
+            rot = (0, -math.atan2(d.z, d.x), 0)
+            parts.append(add_part(f"Finger.{bone}", uv_sphere, (p0 + p1) / 2, (ln / 2 * 1.45, r, r), white_mat, rot=rot, bone=bone))
+            parent, p0 = bone, p1
+
+bpy.ops.object.select_all(action="DESELECT")
+arm.select_set(True)
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.mode_set(mode="EDIT")
+for bone, head, tail, parent in hand_chains:
+    eb = arm.data.edit_bones.new(bone)
+    eb.head, eb.tail = head, tail
+    eb.parent = arm.data.edit_bones[parent]
+    eb.use_deform = True
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.object.select_all(action="DESELECT")
+cat.select_set(True)
+bpy.context.view_layer.objects.active = cat
 
 # ---- 体の色（参考: ゲーム画面の毒チワワ） ----
 # 額の左右に、明るい紫のふちが付いた大きい緑の斑点。角の付け根のまわりに、ふちなしの小さい斑点

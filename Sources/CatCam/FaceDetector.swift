@@ -82,6 +82,16 @@ final class FaceDetector {
         return CACurrentMediaTime() - resultTime <= maxAge ? hands : nil
     }
 
+    /// `HandJoint` の並び
+    private static let handJointNames: [VNHumanHandPoseObservation.JointName] = [
+        .wrist,
+        .thumbCMC, .thumbMP, .thumbIP, .thumbTip,
+        .indexMCP, .indexPIP, .indexDIP, .indexTip,
+        .middleMCP, .middlePIP, .middleDIP, .middleTip,
+        .ringMCP, .ringPIP, .ringDIP, .ringTip,
+        .littleMCP, .littlePIP, .littleDIP, .littleTip,
+    ]
+
     /// 例: "手2 L0.92 R0.88"（L/R は本人から見た左右、数字は手首の信頼度）
     private static func summary(_ obs: [VNHumanHandPoseObservation]) -> String {
         "手\(obs.count)" + obs.map { o in
@@ -97,13 +107,23 @@ final class FaceDetector {
         for o in obs {
             guard let r = try? o.recognizedPoint(.wrist), r.confidence > 0.3 else { continue }
             let p = Vec2(Double(r.location.x), Double(1 - r.location.y))
+            let points: [Vec2?] = handJointNames.map { name in
+                guard let q = try? o.recognizedPoint(name), q.confidence > 0.3 else { return nil }
+                return Vec2(Double(q.location.x), Double(1 - q.location.y))
+            }
             let isLeft: Bool
             switch o.chirality {
             case .left: isLeft = true
             case .right: isLeft = false
             default: isLeft = p.x > (faceX ?? 0.5)
             }
-            if isLeft { j.leftWrist = p } else { j.rightWrist = p }
+            if isLeft {
+                j.leftWrist = p
+                j.leftHand = points
+            } else {
+                j.rightWrist = p
+                j.rightHand = points
+            }
         }
         return j
     }

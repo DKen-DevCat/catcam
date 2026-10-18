@@ -63,8 +63,9 @@ final class Pipeline {
     private var idle: AvatarIdle?
     private var avatarPose: AvatarPose?
     private var avatarSeen: CFTimeInterval = 0
-    private var lastLeftWrist: (Vec2, CFTimeInterval)?
-    private var lastRightWrist: (Vec2, CFTimeInterval)?
+    private typealias HeldHand = (wrist: Vec2, points: [Vec2?]?, time: CFTimeInterval)
+    private var lastLeftHand: HeldHand?
+    private var lastRightHand: HeldHand?
     private lazy var faceDetector: FaceDetector = {
         let d = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
         d.onJoints = { [stats] s in stats.recordJoints(s) }
@@ -171,11 +172,15 @@ final class Pipeline {
 
     /// 手を一瞬見失っても前足が落ちないよう、左右それぞれ 0.4 秒は最後の位置を使う
     private func holdHands(_ j: BodyJoints?, now: CFTimeInterval) -> BodyJoints {
-        if let l = j?.leftWrist { lastLeftWrist = (l, now) }
-        if let r = j?.rightWrist { lastRightWrist = (r, now) }
-        func held(_ h: (Vec2, CFTimeInterval)?) -> Vec2? { h.flatMap { now - $0.1 <= 0.4 ? $0.0 : nil } }
-        return BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: held(lastLeftWrist),
-                          rightShoulder: nil, rightElbow: nil, rightWrist: held(lastRightWrist))
+        if let l = j?.leftWrist { lastLeftHand = (l, j?.leftHand, now) }
+        if let r = j?.rightWrist { lastRightHand = (r, j?.rightHand, now) }
+        func held(_ h: HeldHand?) -> HeldHand? { h.flatMap { now - $0.time <= 0.4 ? $0 : nil } }
+        let l = held(lastLeftHand), r = held(lastRightHand)
+        var out = BodyJoints(leftShoulder: nil, leftElbow: nil, leftWrist: l?.wrist,
+                             rightShoulder: nil, rightElbow: nil, rightWrist: r?.wrist)
+        out.leftHand = l?.points
+        out.rightHand = r?.points
+        return out
     }
 
     /// 新しく湧いたウィンドウに、湧いた瞬間の塊の形で猫を割り当てる。画面に出ている猫とは重複させない

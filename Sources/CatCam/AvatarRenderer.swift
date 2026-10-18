@@ -60,7 +60,12 @@ final class AvatarRenderer {
             enc.setCullMode(.back)
             enc.setFrontFacing(.counterClockwise)
             enc.setVertexBuffer(model.vertexBuffer, offset: 0, index: 0)
-            enc.setVertexBytes(&bones, length: MemoryLayout<simd_float4x4>.stride * bones.count, index: 1)
+            // 骨が 65 本あり setVertexBytes の上限（4KB）を超えるので、バッファに入れて渡す
+            guard let boneBuffer = device.makeBuffer(bytes: &bones, length: MemoryLayout<simd_float4x4>.stride * bones.count) else {
+                enc.endEncoding()
+                return target
+            }
+            enc.setVertexBuffer(boneBuffer, offset: 0, index: 1)
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 2)
             enc.setFragmentTexture(model.texture, index: 0)
             enc.drawIndexedPrimitives(type: .triangle, indexCount: model.indexCount, indexType: .uint32,
