@@ -354,10 +354,13 @@ public struct AvatarPoser: Sendable {
             let eye = headIndex.map { m[$0] * SIMD4(eyeCenter, 1) }
             out.append(AvatarDebugJoint(name: "目", human: mid, avatar: eye.map { pose.project(SIMD3($0.x, $0.y, $0.z)) }))
         }
-        for (side, label, elbow, wrist, hand) in [("L", "左", body?.leftElbow, body?.leftWrist, body?.leftHand),
-                                                  ("R", "右", body?.rightElbow, body?.rightWrist, body?.rightHand)] {
+        typealias Arm = (side: String, label: String, elbow: Vec2?, wrist: Vec2?, hand: [Vec2?]?, behind: Bool)
+        let arms: [Arm] = [("L", "左", body?.leftElbow, body?.leftWrist, body?.leftHand, body?.leftBehindHead ?? false),
+                           ("R", "右", body?.rightElbow, body?.rightWrist, body?.rightHand, body?.rightBehindHead ?? false)]
+        for (side, label, elbow, wrist, hand, behind) in arms {
             out.append(AvatarDebugJoint(name: "\(label)肘", human: elbow, avatar: at("upper_arm.\(side)", tail: true)))
-            out.append(AvatarDebugJoint(name: "\(label)手首", human: wrist, avatar: at("forearm.\(side)", tail: true)))
+            // 頭の後ろに回ったとみなしている手は「奥」を付ける（人の位置は最後に見えた位置）
+            out.append(AvatarDebugJoint(name: "\(label)手首" + (behind ? "(奥)" : ""), human: wrist, avatar: at("forearm.\(side)", tail: true)))
             for (finger, jp) in [("thumb", "親指先"), ("index", "人差指先"), ("middle", "中指先"), ("little", "小指先")] {
                 let start = HandJoint.fingers.first { $0.name == finger }!.start
                 out.append(AvatarDebugJoint(name: "\(label)\(jp)", human: hand?[start + 3], avatar: at("\(finger).3.\(side)", tail: true)))
@@ -512,12 +515,12 @@ public struct HandHold: Sendable {
         return h
     }
 
-    /// 頭（目の上から頭のてっぺんの上まで、あごまで）の範囲にあるか
+    /// 頭のあたり（左右は目の間隔の 2.5 倍、上は頭のてっぺんより上、下はあご）にあるか
     static func nearHead(_ p: Vec2, _ face: CatFaceRig) -> Bool {
         let mid = (face.leftEye.center + face.rightEye.center) * 0.5
         let d = face.eyeDistance
         let rel = p - mid
         let x = rel.dot(face.axis), up = rel.dot(face.up)
-        return abs(x) < 1.8 * d && up > -1.5 * d && up < 2.6 * d
+        return abs(x) < 2.5 * d && up > -1.5 * d && up < 3.5 * d
     }
 }

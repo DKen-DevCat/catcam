@@ -71,6 +71,7 @@ final class Pipeline {
     var debugJoints = false
     private var lastDebugLog: CFTimeInterval = 0
     private var debug: [AvatarDebugJoint] = []
+    private var lastBehind = (false, false)
     private lazy var faceDetector: FaceDetector = {
         let d = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
         d.onJoints = { [stats] s in stats.recordJoints(s) }
@@ -173,6 +174,12 @@ final class Pipeline {
             avatarSeen = now
             if debugJoints, let shown = avatarPose {
                 debug = poser.debugJoints(pose: shown, face: rigs.first, body: hands)
+                // 頭の後ろ判定に入った瞬間・出た瞬間はすぐログに出す（毎秒のログだと見逃す）
+                let behind = (hands.leftBehindHead, hands.rightBehindHead)
+                if behind != lastBehind {
+                    print("behind 左=\(behind.0 ? "奥" : "前") 右=\(behind.1 ? "奥" : "前")  左手首\(hands.leftWrist.map { String(format: "(%.0f,%.0f)", $0.x, $0.y) } ?? "--") 右手首\(hands.rightWrist.map { String(format: "(%.0f,%.0f)", $0.x, $0.y) } ?? "--")")
+                    lastBehind = behind
+                }
                 logDebug(now: now)
             }
         } else if now - avatarSeen > 0.5 {
