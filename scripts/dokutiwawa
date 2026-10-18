@@ -1,0 +1,29 @@
+#!/bin/zsh
+# 毒チワワ（catcam）を起動する。オプションはそのまま CatCam に渡す（例: dokutiwawa --fullframe）
+# ~/.local/bin などにリンクを張って使う: ln -s ~/catcam/scripts/dokutiwawa ~/.local/bin/dokutiwawa
+set -e
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+bin="$root/.build/release/CatCam"
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  cat <<'USAGE'
+使い方: dokutiwawa [オプション]
+  （なし）        湧き出る窓の中に毒チワワを出す
+  --fullframe     窓を出さず、全画面に毒チワワを出す
+  --debug         人と毒チワワの関節を点で表示し、ずれを毎秒ログに出す
+  --seconds N     N 秒で自動終了する
+  --camera 名前   使うカメラ（名前の一部、例: iPhone）
+  --no-mirror     左右反転しない
+終了: Esc キー、またはパネルの Quit
+USAGE
+  exit 0
+fi
+
+# 未ビルド、またはソースの方が新しければビルドしてから起動する
+if [[ ! -x "$bin" ]] || [[ -n "$(find "$root/Sources" "$root/Package.swift" -newer "$bin" -print -quit)" ]]; then
+  echo "ビルドしています…" >&2
+  swift build -c release --package-path "$root" >&2
+  # 中身が変わらないと実行ファイルは更新されないので、次回また判定に引っかからないよう日付だけ進める
+  touch "$bin"
+fi
+exec "$bin" "$@"
