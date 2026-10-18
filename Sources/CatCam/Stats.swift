@@ -17,6 +17,8 @@ final class Stats {
     private var tracks = 0
     private var areaSum = 0
     private var frozenFrames = 0
+    /// 体の関節の検出状況（診断用）。どのスレッドから書いてもよい
+    private var joints = "-"
     private var start = CACurrentMediaTime()
     private var cpuStart = Stats.cpuSeconds()
 
@@ -52,6 +54,12 @@ final class Stats {
         lock.unlock()
     }
 
+    func recordJoints(_ s: String) {
+        lock.lock()
+        joints = s
+        lock.unlock()
+    }
+
     func roll() -> String {
         lock.lock()
         defer { lock.unlock() }
@@ -66,7 +74,7 @@ final class Stats {
             blobs, tracks, (cpu - cpuStart) / dt * 100
         ) + String(format: "  area %.0f  frozen %.0f%%",
                    camFrames > 0 ? Double(areaSum) / Double(camFrames) : 0,
-                   camFrames > 0 ? Double(frozenFrames) / Double(camFrames) * 100 : 0)
+                   camFrames > 0 ? Double(frozenFrames) / Double(camFrames) * 100 : 0) + "  hands[\(joints)]"
         areaSum = 0
         frozenFrames = 0
         camFrames = 0

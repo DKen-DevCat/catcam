@@ -19,6 +19,12 @@ struct Scene {
     /// 人物マスク。nil なら切り抜かずにカメラ映像をそのまま出す
     var personMask: CVPixelBuffer?
     var personMaskVersion = 0
+    /// 猫フィルタで顔に描く猫のパーツの配置（カメラのピクセル座標）
+    var rigs: [CatFaceRig] = []
+    /// 3D アバターの姿勢と置き場所（カメラのピクセル座標）。顔が取れていなければ nil
+    var avatar: AvatarPose?
+    /// デバッグ表示: 人の関節（水色）と、対応するアバターの関節（ピンク）
+    var debugJoints: [AvatarDebugJoint] = []
 }
 
 /// カメラフレームごとに 縮小 → 動き検出 → 追跡 を行い、最新の Scene を公開する
@@ -52,7 +58,25 @@ final class Pipeline {
     private var catMatcher: CatMatcher?
     private var catsEnabled = true
     private var cats: [Int: CatMatcher.Match] = [:]
-    private lazy var faceDetector = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
+    /// queue 上でのみ触る。前フレームの配置へ寄せて、15Hz の検出を 30fps で滑らかにつなぐ
+    private var rigs: [CatFaceRig] = []
+    // 以下 2 つは queue 上でのみ触る
+    private var poser: AvatarPoser?
+    private var idle: AvatarIdle?
+    private var avatarPose: AvatarPose?
+    private var avatarSeen: CFTimeInterval = 0
+    /// 手を見失った時に、頭の後ろに回ったのか画面の外に出たのかを見分けて残す
+    private var handHold = HandHold()
+    /// true なら人とアバターの関節を Scene に入れ、毎秒ログに出す
+    var debugJoints = false
+    private var lastDebugLog: CFTimeInterval = 0
+    private var debug: [AvatarDebugJoint] = []
+    private var lastBehind = (false, false)
+    private lazy var faceDetector: FaceDetector = {
+        let d = FaceDetector(device: MTLCreateSystemDefaultDevice()) { [stats] ms in stats.recordFace(ms: ms) }
+        d.onJoints = { [stats] s in stats.recordJoints(s) }
+        return d
+    }()
     private lazy var segmenter = PersonSegmenter(gateWidth: 160, gateHeight: 90) { [stats] ms in stats.recordPerson(ms: ms) }
     // 以下 2 つは queue 上でのみ触る
     private var systemFaces: [Rect] = []
@@ -84,6 +108,16 @@ final class Pipeline {
         queue.async { [self] in catsEnabled = on }
     }
 
+    /// nil ならアバターの姿勢を計算しない
+    func setAvatarPoser(_ p: AvatarPoser?) {
+        queue.async { [self] in
+            poser = p
+            idle = p.map { AvatarIdle(skeleton: $0.skeleton) }
+            avatarPose = nil
+            faceDetector.handsEnabled = p != nil
+        }
+    }
+
     func setPersonEnabled(_ on: Bool) {
         queue.async { [self] in personEnabled = on }
     }
@@ -103,12 +137,17 @@ final class Pipeline {
         motion.config.maxBlobHeight = maxWindow
         let gray = downsampler.gray(pb)
         let faces = faceSmoother.update(currentFaces(pb, now: t0))
+        let size = (w: Double(CVPixelBufferGetWidth(pb)), h: Double(CVPixelBufferGetHeight(pb)))
+        rigs = CatFaceRig.smooth(previous: rigs,
+                                 current: faces.compactMap { $0.landmarks.flatMap { CatFaceRig($0.scaled(width: size.w, height: size.h)) } },
+                                 t: 0.6)
         var person: PersonSegmenter.Result?
         if personEnabled {
             person = segmenter.latest(maxAge: 0.5)
             segmenter.submitIfIdle(pb)
         }
         // 顔は専用のウィンドウで出すので、顔の動きは動きのウィンドウにしない
+        updateAvatar(size: size, now: t0)
         let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faces.map { $0.rect.padded(0.15) })
         let tracks = tracker.update(blobs: blobs)
         assignCats(tracks: tracks, blobs: blobs)
@@ -119,8 +158,45 @@ final class Pipeline {
 
         lock.lock()
         current = Scene(pixelBuffer: pb, tracks: tracks, cats: catsEnabled ? cats : [:], faces: faces, faceTracks: faceTracks, faceFillTracks: faceFillTracks,
-                        personMask: person?.mask, personMaskVersion: person?.version ?? 0)
+                        personMask: person?.mask, personMaskVersion: person?.version ?? 0, rigs: rigs,
+                        avatar: avatarPose.map { idle?.apply($0, time: t0) ?? $0 },
+                        debugJoints: debugJoints && avatarPose != nil ? debug : [])
         lock.unlock()
+    }
+
+    /// 顔（と取れれば体）からアバターの姿勢を決める。検出は 15Hz なので毎フレーム寄せて滑らかにする。
+    /// 顔を一瞬見失っても消えないよう、0.5 秒は前の姿勢を残す
+    private func updateAvatar(size: (w: Double, h: Double), now: CFTimeInterval) {
+        guard let poser else { return }
+        let hands = handHold.update(faceDetector.latestHands(maxAge: 0.3)?.scaled(width: size.w, height: size.h), face: rigs.first, now: now)
+        if let target = poser.pose(face: rigs.first, body: hands) {
+            avatarPose = target.blended(from: avatarPose, t: 0.5)
+            avatarSeen = now
+            if debugJoints, let shown = avatarPose {
+                debug = poser.debugJoints(pose: shown, face: rigs.first, body: hands)
+                // 頭の後ろ判定に入った瞬間・出た瞬間はすぐログに出す（毎秒のログだと見逃す）
+                let behind = (hands.leftBehindHead, hands.rightBehindHead)
+                if behind != lastBehind {
+                    print("behind 左=\(behind.0 ? "奥" : "前") 右=\(behind.1 ? "奥" : "前")  左手首\(hands.leftWrist.map { String(format: "(%.0f,%.0f)", $0.x, $0.y) } ?? "--") 右手首\(hands.rightWrist.map { String(format: "(%.0f,%.0f)", $0.x, $0.y) } ?? "--")")
+                    lastBehind = behind
+                }
+                logDebug(now: now)
+            }
+        } else if now - avatarSeen > 0.5 {
+            avatarPose = nil
+        }
+    }
+
+    /// 例: "joints 左手首 H(612,388) A(615,390) Δ3 | 左肘 H-- A(560,470) | ..."
+    private func logDebug(now: CFTimeInterval) {
+        guard now - lastDebugLog >= 1 else { return }
+        lastDebugLog = now
+        func f(_ p: SIMD2<Float>?) -> String { p.map { String(format: "(%.0f,%.0f)", $0.x, $0.y) } ?? "--" }
+        let parts = debug.map { j in
+            let h = f(j.human.map { SIMD2(Float($0.x), Float($0.y)) })
+            return "\(j.name) H\(h) A\(f(j.avatar))" + (j.error.map { String(format: " Δ%.0f", $0) } ?? "")
+        }
+        print("joints " + parts.joined(separator: " | "))
     }
 
     /// 新しく湧いたウィンドウに、湧いた瞬間の塊の形で猫を割り当てる。画面に出ている猫とは重複させない

@@ -15,6 +15,10 @@ struct Options {
     var noPerson = false
     /// 猫ライブラリのディレクトリ（省略時はパッケージ直下の catlib/）
     var catlib: String?
+    /// 窓を出さず映像全体を 1 枚で出す（猫フィルタの見た目確認用）
+    var fullFrame = false
+    /// 人とアバターの関節を点で表示し、ずれを毎秒ログに出す
+    var debug = false
 
     static func parse(_ args: [String]) -> Options {
         var o = Options()
@@ -30,6 +34,8 @@ struct Options {
             case "--no-face": o.noFace = true
             case "--no-person": o.noPerson = true
             case "--catlib": o.catlib = it.next()
+            case "--fullframe": o.fullFrame = true
+            case "--debug": o.debug = true
             default: print("unknown option: \(a)")
             }
         }

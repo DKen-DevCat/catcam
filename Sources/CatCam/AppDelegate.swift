@@ -26,15 +26,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pipeline.useSystemFaces = camera.providesFaces && !options.visionFaces
             pipeline.compareFaces = options.compareFaces
             pipeline.faceEnabled = !options.noFace
+            pipeline.debugJoints = options.debug
             pipeline.personEnabled = !options.noPerson
             let overlay = try OverlayWindow(screen: screen, device: device, source: pipeline, mirror: options.mirror)
             overlay.orderFrontRegardless()
             overlay.renderer.backgroundMode = options.noPerson ? .original : .glass
             do {
+                let model = try AvatarModel(directory: AvatarModel.defaultDirectory, device: device)
+                overlay.renderer.avatar = try AvatarRenderer(model: model, device: device)
+                overlay.renderer.avatarOn = true
+                pipeline.setAvatarPoser(model.makePoser())
+                print("avatar: \(model.skeleton.bones.count) bones")
+            } catch {
+                print("avatar: unavailable (\(error.localizedDescription)). tools/blender の手順で models/out/ を作るとアバターが出る")
+                overlay.renderer.catStyle = CatStyle.presets[0]
+            }
+            overlay.renderer.fullFrame = options.fullFrame
+            // 人物を猫フィルタで描くので、人物マスクは背景モードによらず要る
+            pipeline.personEnabled = true
+            do {
                 let cats = try CatAtlas(directory: options.catlib.map(URL.init(fileURLWithPath:)) ?? CatAtlas.defaultDirectory,
                                         device: device)
                 overlay.renderer.cats = cats
                 pipeline.setCatMatcher(cats.matcher)
+                // 起動時は猫フィルタなので、写真の猫への差し替えは止めておく
+                pipeline.setCatsEnabled(false)
                 print("cats: \(cats.index.entries.count)")
             } catch {
                 print("cats: unavailable (\(error.localizedDescription)). catlib-builder で catlib/ を作ると猫に差し替わる")
