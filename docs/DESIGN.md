@@ -241,6 +241,10 @@ swift run -c release catlib-builder   # → catlib/shape_atlas.png, catlib/index
 - 前後関係: 手が見えている間は前腕から先を顔より手前に出す。頭のあたりで見えなくなった手（体の関節検出だけが推測で手首を返す場合を含む）は頭の後ろに回ったとみなし、最大 5 秒、頭より奥に描く。それ以外で見失った手は 0.4 秒で下ろす（CatCore.HandHold）。
 - 待機中の動き: 尻尾を左右にゆらし、呼吸で体を少し上下させる（CatCore.AvatarIdle）。
 
+### 起動コマンド
+- `scripts/dokutiwawa` を `~/.local/bin/dokutiwawa` にリンクして、ターミナルから `dokutiwawa` で起動する（`ln -s ~/catcam/scripts/dokutiwawa ~/.local/bin/dokutiwawa`）。
+- オプションはそのまま CatCam に渡す。`dokutiwawa --help` で一覧。未ビルド、またはソースの方が新しければ自動でビルドしてから起動する。
+
 ### デバッグ
 - `CatCam --fullframe --debug` で人の関節（水色の輪）とアバターの関節（ピンクの点）を表示し、関節ごとのずれを毎秒ログに出す。頭の後ろ判定の切り替わりもログに出す。
 - 2026-10-19 時点のずれ（中央値）: 目 0〜1px、肘 0〜1px、手首 1〜3px、指先 0〜8px。CPU 50〜60%。

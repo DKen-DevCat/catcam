@@ -52,8 +52,8 @@ final class Pipeline {
     private let faceTracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0))
     // はみ出し部分の小さいウィンドウも湧いた場所から動かない
     private let faceFillTracker = Tracker(config: TrackerConfig(iouThreshold: 0.3, historyLength: 0, smoothing: 0))
-    /// はみ出し部分を埋めるウィンドウの最大サイズ（通常の最大サイズに対する比率）
-    private let faceFillScale = 0.35
+    // 小さい窓が整列しないよう、窓は中くらいの大きさでばらつかせ、必ずほかの窓に重ねる
+    private let scatter = WindowScatter()
     // 以下は queue 上でのみ触る。ウィンドウは動かないので、猫は湧いた瞬間の形で一度だけ選ぶ
     private var catMatcher: CatMatcher?
     private var catsEnabled = true
@@ -148,11 +148,14 @@ final class Pipeline {
         }
         // 顔は専用のウィンドウで出すので、顔の動きは動きのウィンドウにしない
         updateAvatar(size: size, now: t0)
-        let blobs = motion.process(gray, gate: person?.gate).excluding(faces: faces.map { $0.rect.padded(0.15) })
+        let shown = (tracker.tracks + faceTracker.tracks + faceFillTracker.tracks).map(\.rect)
+        let blobs = scattered(motion.process(gray, gate: person?.gate).excluding(faces: faces.map { $0.rect.padded(0.15) }),
+                              aspect: aspect, existing: shown)
         let tracks = tracker.update(blobs: blobs)
         assignCats(tracks: tracks, blobs: blobs)
         let faceTracks = faceTracker.update(blobs: faces.map { Blob(rect: $0.rect.padded(0.15), area: 0) })
-        let faceFillTracks = faceFillTracker.update(blobs: faceFill(faces: faces, windows: faceTracks, aspect: aspect))
+        let faceFillTracks = faceFillTracker.update(blobs: scattered(faceFill(faces: faces, windows: faceTracks, aspect: aspect),
+                                                                     aspect: aspect, existing: faceTracks.map(\.rect)))
         stats.recordFrame(ms: (CACurrentMediaTime() - t0) * 1000, blobs: blobs.count, tracks: tracks.count,
                           area: blobs.reduce(0) { $0 + $1.area }, frozen: tracks.contains { $0.frozen })
 
@@ -218,11 +221,17 @@ final class Pipeline {
     /// 細すぎる帯は捨てる（わずかなズレで小窓が湧かないように）
     private func faceFill(faces: [Face], windows: [Track], aspect: Double) -> [Blob] {
         let live = windows.filter { $0.missed == 0 }.map(\.rect)
-        let maxH = maxWindow * faceFillScale, maxW = maxH * aspect
+        let maxH = maxWindow, maxW = maxH * aspect
         return faces.map(\.rect).subtracting(live)
             .filter { min($0.w / aspect, $0.h) >= 0.012 }
             .flatMap { $0.tiled(maxW: maxW, maxH: maxH) }
             .map { Blob(rect: $0, area: 0) }
+    }
+
+    /// 塊の矩形を、出す窓の矩形に置き換える（面積と形はそのまま）
+    private func scattered(_ blobs: [Blob], aspect: Double, existing: [Rect]) -> [Blob] {
+        let ws = scatter.windows(for: blobs.map(\.rect), base: maxWindow, aspect: aspect, existing: existing)
+        return zip(blobs, ws).map { b, w in Blob(rect: w, area: b.area, shape: b.shape) }
     }
 
     private func currentFaces(_ pb: CVPixelBuffer, now: CFTimeInterval) -> [Face] {
